@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import filedialog as fd
 from tkinter import ttk
 import numpy as np
-from scipy.ndimage import sobel, binary_dilation, binary_erosion
+from scipy.ndimage import sobel, binary_dilation
 
 class PDFViewer:
     def __init__(self, master):
@@ -105,6 +105,11 @@ class PDFViewer:
         # Crop the image
         img = self.load_page_image()
         cropped_img = img.crop((left, top, right, bottom))
+        # Make white background transparent
+        cropped_array = np.array(cropped_img)
+        white_mask = np.all(cropped_array[:, :, :3] >= 250, axis=-1)  # Near-white pixels
+        cropped_array[white_mask, 3] = 0  # Set alpha to 0 for transparency
+        cropped_img = Image.fromarray(cropped_array)
         self.page_images[self.current_page] = cropped_img
         self.show_page()
         # Exit crop mode
@@ -178,8 +183,7 @@ class PDFViewer:
 
         # Dilate to close gaps in dotted lines
         structure = np.ones((3, 3), dtype=bool)  # Smaller structure to avoid over-dilation
-        closed_binary = binary_dilation(binary, structure=structure, iterations=5)
-        closed_binary = binary_erosion(closed_binary, structure=structure, iterations=4)
+        closed_binary = binary_dilation(binary, structure=structure, iterations=1)
 
         # Create barrier image: 255 for fillable areas, 0 for barriers
         barrier = np.ones((img.height, img.width), dtype=np.uint8) * 255
