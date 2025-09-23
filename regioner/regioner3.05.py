@@ -9,6 +9,8 @@ from skimage import filters, morphology, measure, util, feature, segmentation, c
 from scipy import ndimage as ndi
 import pandas as pd
 import copy
+#temp for print(X, file=sys.stderr) debug checking
+import sys
 
 
 class PDFViewer:
@@ -159,7 +161,7 @@ Table of Contents
 This GUI is designed for regional analysis of immunofluorescence (IF) images. It allows users to overlay atlas sections on TIFF images, highlight specific regions, count cells within those regions, and export results.
 
 2. Importing Files
-- Use "File > Import Atlas Section" to load a PDF or SVG atlas file.
+- Use "File > Import Atlas Section" to load a PDF atlas file.
 - Use the "Import TIFF" button to load a TIFF image file. The image will be resized to fit the window.
 
 3. Manipulating the Atlas
@@ -351,16 +353,16 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
     def open_file(self):
         self.save_state()
-        self.path = fd.askopenfilename(filetypes=[("PDF files", "*.pdf"), ("SVG files", "*.svg")])
+        self.path = fd.askopenfilename(filetypes=[("PDF files", "*.pdf")])
         if self.path:
             self.doc = fitz.open(self.path)
             self.num_pages = len(self.doc)
-            # Calculate zoom to fit 75% of window
+            # Calculate zoom
             page = self.doc[0]
             pw = page.rect.width
             ph = page.rect.height
-            ww = 1200 * 0.75
-            wh = 1200 * 0.75
+            ww = 1200
+            wh = 1200
             self.zoom = min(ww / pw, wh / ph)
             self.current_page = 0
             self.page_images = {}
@@ -368,6 +370,10 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             self.zone_counters = {}
             self.zone_names = {}
             self.show_page()
+            #temp: page.rect.{width, height} does not output 1200 as expected, is this because the overall window is 1200x1200 and those variables are only denoting the "workable space" where we can put a picture. (total space - top and bottom bar - scroll bars etc...)
+            print("pw ", pw, file=sys.stderr)
+            print("ph ", ph, file=sys.stderr)
+            print("self.zoom ", self.zoom, file=sys.stderr)
 
     def load_page_image(self):
         if self.doc:
