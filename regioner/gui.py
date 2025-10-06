@@ -132,7 +132,7 @@ class PDFViewer:
         text.config(yscrollcommand=scrollbar.set)
 
         manual_content = """
-Table of Contents
+        Table of Contents
 1. Introduction
 2. Importing Files
 3. Manipulating the Atlas
@@ -142,7 +142,37 @@ Table of Contents
 7. Hotkeys
 8. Undo Functionality
 
-This GUI is designed for regional analysis of immunofluorescence (IF) images...
+1. Introduction
+This GUI is designed for regional analysis of immunofluorescence (IF) images. It allows users to overlay atlas sections on TIFF images, highlight specific regions, count cells within those regions, and export results.
+
+2. Importing Files
+- Use "File > Import Atlas Section" to load a PDF atlas file.
+- Use the "Import TIFF" button to load a TIFF image file. The image will be resized to fit the window.
+
+3. Manipulating the Atlas
+- "Crop": Enables crop mode to select and crop a region of the atlas.
+- "Move Atlas": Enables drag mode to move the atlas overlay.
+- "Rotate": Enter degrees and click "Rotate" to rotate the atlas.
+- "Resize": Enter a scale factor and click "Resize" to scale the atlas.
+
+4. Highlighting Regions
+- Click on a region in the atlas to highlight it with a translucent yellow overlay.
+- A prompt will appear to name the region (optional).
+
+5. Counting Cells
+- After highlighting regions, click "Count Cells" to analyze cells in the highlighted areas.
+- Results are saved to an Excel file with region names and cell counts.
+
+6. Saving Outputs
+- "File > Save Flattened Image": Saves the combined image and atlas as a JPG.
+- Cell count results prompt for an Excel save location.
+
+7. Hotkeys
+- Ctrl+Z: Undo the last action.
+- Ctrl+S: Save the flattened image.
+
+8. Undo Functionality
+- Actions like cropping, moving, rotating, resizing, and highlighting can be undone with Ctrl+Z.
 """
         text.insert(tk.END, manual_content)
         text.config(state=tk.DISABLED)
