@@ -1,0 +1,6 @@
+# generated files
+__pycache__
+*.xlsx
+
+# test directory
+regioner/test/
