@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python3
 import fitz
 import tkinter as tk
 from tkinter import filedialog as fd, ttk, messagebox, simpledialog, Toplevel
@@ -12,7 +12,7 @@ from scipy.ndimage import distance_transform_edt
 import pandas as pd
 import os
 
-#temp for print(X, file=sys.stderr) debug checking
+#temp for print(X,file=sys.stderr) debug checking
 import sys
 
 
@@ -21,8 +21,12 @@ class PDFViewer:
     def __init__(self):
         self.root = tk.Tk()
         self.master = self.root
+        self.master.bind('<q>', self.quit)
         self.master.title('Regional IF Analyzer')
-        self.master.geometry('%dx%d' % (self.master.winfo_screenwidth(), self.master.winfo_screenheight()))
+        # This is swappable for to make dev runs easier
+#       self.master.geometry('%dx%d' % (self.master.winfo_screenwidth(), self.master.winfo_screenheight()))
+        self.master.geometry('1200x1200')
+
         self.master.resizable(True, True)
         self.master.rowconfigure(0, weight=1)
         self.master.rowconfigure(1, weight=0)
@@ -77,6 +81,7 @@ class PDFViewer:
         # Background (TIFF) image
         self.background_image = None
         self.original_background = None
+        self.bg_photo_id = None
 
         # TIFF filename
         self.tiff_filename = None
@@ -92,6 +97,9 @@ class PDFViewer:
         self._build_gui()
 
         self.root.mainloop()
+
+    def quit(self, master):
+        self.master.destroy()
 
     def _build_gui(self):
         # Menu
@@ -219,13 +227,33 @@ class PDFViewer:
         self.output.bind('<B1-Motion>', self.paint)
         self.output.bind('<ButtonRelease-1>', self.reset)
         print('start painting', file=sys.stderr)
+        x0, y0, x1, y1 = self.output.bbox(tk.ALL)
+        print(x0,file=sys.stderr)
 
     def stop_paint(self):
         self.output.unbind('<B1-Motion>')
         self.output.unbind('<ButtonRelease-1>') 
         self.output.bind('<Button-1>', self.highlight_region)
         print('stop painting', file=sys.stderr)
+        self.output.itemconfig(self.bg_photo_id, state='hidden')
+        self.output.postscript(file='test.ps', colormode='color')
+        self.output.itemconfig(self.bg_photo_id, state='normal')
+        self.save_paint
         self.show_page
+
+    def save_paint(self):
+        
+#clear the background
+        self.output.itemconfig(self.bg_photo_id, state='hidden')
+#screenshot the drawing
+        self.output.postscript(file='test.ps', colormode='color')
+#return the background
+        self.output.itemconfig(self.bg_photo_id, state='normal')
+
+#display the drawing as the atlas
+#       TODO
+#clear the drawing
+#       TODO
 
     def use_pen(self):
         self.activate_button(self.pen_button)
@@ -388,7 +416,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         if self.background_image:
             display_bg = self.adjust_image(self.background_image)
             self.background_photo = ImageTk.PhotoImage(display_bg)
-            self.output.create_image(0, 0, image=self.background_photo, anchor='nw')
+            self.bg_photo_id = self.output.create_image(0, 0, image=self.background_photo, anchor='nw')
             print('background', file=sys.stderr)
         self.output.create_image(self.img_x, self.img_y, image=self.photo, anchor='nw')
         self.output.config(scrollregion=self.output.bbox(tk.ALL))
