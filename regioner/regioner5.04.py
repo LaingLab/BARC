@@ -52,7 +52,7 @@ class PDFViewer:
         self.doc = None
         self.current_page = 0
         self.num_pages = 0
-        self.zoom = 4.0
+        self.zoom = 1.0
         self.page_images = {}
         self.mask_images = {}
         self.zone_counters = {}
@@ -137,7 +137,6 @@ class PDFViewer:
         self.scrolly.configure(command=self.output.yview)
         self.scrollx.configure(command=self.output.xview)
 
-        # PIL canvas for paint image creation
 
         # Paint tools
         self.pen_button = tk.Button(self.right_frame, text='pen', command=self.use_pen)
@@ -389,6 +388,13 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             ph = page.rect.height
             ww = 1200
             wh = 1200
+            print(pw, file=sys.stderr)
+            print(ph, file=sys.stderr)
+            print(ph, file=sys.stderr)
+            print(self.output.coords(self.output), file=sys.stderr)
+            # ww and wh are hardcoded and not based on the size of the canvas, causing improper scaling
+            # Use something like self.output.winfo_width() and self.output.winfo_height()
+            # Or self.output.winfo_reqwidth() and self.output.winfo_reqheight()
             try:
                 self.zoom = min(ww / pw, wh / ph)
             except Exception:
