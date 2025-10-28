@@ -8,6 +8,7 @@ import copy
 from skimage import filters, morphology, measure, util, feature, segmentation, color
 from skimage.morphology import binary_closing
 from scipy.ndimage import distance_transform_edt
+from scipy import ndimage as ndi
 
 import pandas as pd
 import os
@@ -187,7 +188,7 @@ class PDFViewer:
         # Brightness slider
         self.brightness_label = ttk.Label(self.bottom_frame, text="Brightness:")
         self.brightness_label.pack(side=tk.LEFT, padx=8, pady=8)
-        self.brightness_slider = ttk.Scale(self.bottom_frame, from_=-100, to=100, orient=tk.HORIZONTAL, command=self.update_brightness)
+        self.brightness_slider = ttk.Scale(self.bottom_frame, from_=-100, to=400, orient=tk.HORIZONTAL, command=self.update_brightness)
         self.brightness_slider.pack(side=tk.LEFT, padx=4, pady=8)
         self.brightness_slider.set(0)
 
@@ -211,12 +212,14 @@ class PDFViewer:
         self.count_button.pack(side=tk.LEFT, padx=10, pady=10)
         self.count_button_packed = True 
 
+        # Keyboard shortcuts
         self.master.bind('<Control-z>', self._undo_event)
         self.master.bind('<Control-s>', self.save_flattened_image)
 
         # Paint buttons
         ttk.Button(self.right_frame, text="Start Paint", command=self.start_paint).grid(row=3, column=0, pady=5)
         ttk.Button(self.right_frame, text="Stop Paint", command=self.stop_paint).grid(row=4, column=0, pady=5)
+        ttk.Button(self.right_frame, text="Show Mask", command=self.show_cell_mask_threshold).grid(row=6, column=0, pady=5)
     
     def start_paint(self):
         self.old_x = None
@@ -385,7 +388,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
     # ---------- PDF / RENDER ----------
     def open_file(self):
         self.save_state()
-        path = fd.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+        path = fd.askopenfilename(filetypes=[("PDF files", "*.pdf"), ("PDF files", "*.ai")])
         if path:
             self.path = path
             self.doc, self.num_pages = self.pdf_handler.open_pdf(self.path)
@@ -696,6 +699,19 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         else:
             messagebox.showinfo("Cell Counts", f"Cell counts per zone: {dict(zip(df['Zone'], df['Cell_Count']))}")
 
+
+    def show_cell_mask_threshold(self):
+        _, binary = binary_mask_cell_count( 
+            self.original_background,
+            self.sensitivity_slider.get()
+        )
+        binary = Image.fromarray(binary)
+        binary = binary.convert('RGBA')
+        self.background_image = binary 
+        self.show_page()
+
+
+
     # ---------- SAVE FLATTENED ----------
     def save_flattened_image(self, event=None):
         if self.background_image is None or self.current_page not in self.page_images:
@@ -780,8 +796,11 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             self.last_df.to_excel(excel_path, index=False)
 
         # Clear data, image, and atlas
+        clear_preprocess_cache()
         self.background_image = None
         self.original_background = None
+        self.img = None
+        self.atlas_filetype = None
         self.doc = None
         self.page_images = {}
         self.mask_images = {}
@@ -792,9 +811,9 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         self.img_y = 0
 
         # Hide count button if packed
-        if self.count_button_packed:
-            self.count_button.pack_forget()
-            self.count_button_packed = False
+        # if self.count_button_packed:
+        #     self.count_button.pack_forget()
+        #     self.count_button_packed = False
 
         self.show_page()
         messagebox.showinfo("Next Image", f"Autosaved image to {image_path}\nAutosaved counts to {excel_path}" if self.last_df is not None else f"Autosaved image to {image_path}")
@@ -876,7 +895,7 @@ def preprocess_for_highlighting(page_id, img):
 def clear_preprocess_cache():
     _PREPROCESS_CACHE.clear()
 
-def count_cells_in_zones(background_pil, mask_pil, page_pil, img_x, img_y, zone_counters, zone_names, sensitivity):
+def binary_mask_cell_count(background_pil, sensitivity):
     bg_arr = np.array(background_pil)
     if bg_arr.ndim == 3:
         if bg_arr.shape[2] == 4:
@@ -886,22 +905,67 @@ def count_cells_in_zones(background_pil, mask_pil, page_pil, img_x, img_y, zone_
             img2d = color.rgb2gray(bg_arr)
     else:
         img2d = bg_arr.astype(float) / 255.0
+    # This should already be a float, so why are we converting it again?
     intensity = util.img_as_float(img2d)
-    # print("intensity: ", intensity, file=sys.stderr)
-    intensity = filters.gaussian(intensity, sigma=1.0)
-    # print("intensity: ", intensity, file=sys.stderr)
+    # intensity = filters.gaussian(intensity, sigma=2.0)
+
+    # # --- This is the version from following along on the nuclear envelope thing on scikit-image
+    # # https://scikit-image.org/docs/stable/auto_examples/applications/plot_fluorescence_nuclear_envelope.html
+    # # This does not want to work
+    # intensity = util.img_as_ubyte(intensity)
+    # smooth = filters.gaussian(intensity, sigma=1)
+    # print(smooth, file=sys.stderr)
+    # thresh_value = filters.threshold_otsu(smooth)
+    # thresh = smooth > thresh_value
+    # fill = ndi.binary_fill_holes(thresh)
+    # clear = segmentation.clear_border(fill)
+    # dilate = morphology.binary_dilation(clear)
+    # erode = morphology.binary_erosion(clear)
+    # mask = np.logical_and(dilate, ~erode)
+    #
+    # return img2d, smooth 
+
+
+    # # --- This is the DeCalciOn version
+    # intensity = util.img_as_ubyte(intensity)
+    # kernel_3 = np.ones((13, 13), np.uint8)
+    # kernel_19 = np.ones((77, 77), np.uint8)
+    # smooth = filters.rank.mean(intensity, kernel_3)
+    # # erosion and dilation START HERE
+    # eroded = morphology.erosion(smooth, footprint=kernel_19)
+    # dilated = morphology.dilation(eroded, footprint=kernel_19)
+    # background = dilated
+    # binary = intensity > background 
+    # print('intensity: ', intensity, file=sys.stderr)
+    # print('background: ', background, file=sys.stderr)
+
+
+    # --- This is the Laing Lab version
     thresh = filters.threshold_otsu(intensity)
-    # print("thresh: ", thresh, file=sys.stderr)
+
+    background_ubyte = util.img_as_ubyte(img2d)
+    radius = 101
+    footprint = morphology.disk(radius)
+    otsu_thresh = filters.rank.otsu(background_ubyte, footprint)
+    thresh = util.img_as_float(otsu_thresh)
+    print(thresh, file=sys.stderr)
 
     # implements the sensitivity for cell detection
     multiplier = 1.1 - (sensitivity / 100.0) * 0.2  # 1.1 at 0, 0.9 at 100
-    # print("multiplier: ", multiplier, file=sys.stderr)
-    effective_thresh = thresh * multiplier
-    # print("effective_thresh: ", effective_thresh, file=sys.stderr)
+    effective_thresh =  thresh * multiplier
     binary = intensity > effective_thresh
+    
+    # Remove large objects (adjust min_size based on image resolution/cell size, e.g., for small fluorescent spots)
+    large_objects = morphology.remove_small_objects(binary, min_size=100)
+    small_objects = binary ^ large_objects
+    # Remove small objects
+    medium_objects = morphology.remove_small_objects(small_objects, min_size=20)
 
-    # Remove small objects (adjust min_size based on image resolution/cell size, e.g., for small fluorescent spots)
-    binary = morphology.remove_small_objects(binary, min_size=20)
+    return img2d, medium_objects 
+    # return img2d, binary
+
+def count_cells_in_zones(background_pil, mask_pil, page_pil, img_x, img_y, zone_counters, zone_names, sensitivity):
+    img2d, binary = binary_mask_cell_count(background_pil, sensitivity)
 
     # Distance transform for watershed
     distance = distance_transform_edt(binary)
@@ -957,10 +1021,6 @@ def count_cells_in_zones(background_pil, mask_pil, page_pil, img_x, img_y, zone_
     except Exception:
         font = ImageFont.load_default()
 
-# and this
-    # binary = Image.fromarray(binary)
-    # binary = binary.convert('RGBA')
-
     for i, prop in enumerate(filtered_props, start=1):
         r, c = prop.centroid
         draw.text((int(c), int(r)), str(i), fill=(255,0,0,77), font=font)
@@ -971,9 +1031,7 @@ def count_cells_in_zones(background_pil, mask_pil, page_pil, img_x, img_y, zone_
         zone_list.append(name)
         count_list.append(counts[zid])
     df = pd.DataFrame({'Zone': zone_list, 'Cell_Count': count_list})
-  return annotated, df, counts
-    # This is just for testing, remove all of this before moving on
-    # return binary, df, counts
+    return annotated, df, counts
 
 
 
