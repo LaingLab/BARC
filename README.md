@@ -84,4 +84,3 @@ For issues and feature requests, please open an issue in the GitHub repository.
 
 ## License
 
-[Add your license information here]

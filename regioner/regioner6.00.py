@@ -2,7 +2,6 @@
 import fitz
 import tkinter as tk
 from tkinter import filedialog as fd, ttk, messagebox, simpledialog, Toplevel
-import functools
 from PIL import Image, ImageTk, ImageDraw, ImageFont, ImageEnhance
 import numpy as np
 import copy
@@ -19,7 +18,6 @@ import io
 import logging
 import yaml
 import sys
-import gc
 
 # Configure logging
 logging.basicConfig(
@@ -264,9 +262,8 @@ class ImageProcessor:
 def clear_preprocess_cache():
     _PREPROCESS_CACHE.clear()
 
-@functools.lru_cache(maxsize=8)
 def binary_mask_cell_count(background_pil, sensitivity):
-    """Enhanced cell detection using ImageProcessor class with caching"""
+    """Enhanced cell detection using ImageProcessor class"""
     processor = ImageProcessor()
     img, labels = processor.detect_cells(background_pil, sensitivity)
     return img, labels > 0
@@ -276,28 +273,6 @@ class PDFViewer:
         logger.info("Initializing PDFViewer")
         self.root = tk.Tk()
         self.master = self.root
-        
-    def _reset_state(self):
-        """Reset application state variables"""
-        self.img_x = 0
-        self.img_y = 0
-        self.current_page = 0
-        self.zone_counters = {}
-        self.zone_names = {}
-        self.last_df = None
-        
-    def _clear_memory(self):
-        """Clear cached images and large objects"""
-        clear_preprocess_cache()
-        if hasattr(self, 'doc') and self.doc:
-            self.doc.close()
-        self.background_image = None
-        self.original_background = None
-        self.img = None
-        self.atlas_filetype = None
-        self.doc = None
-        self.page_images = {}
-        self.mask_images = {}
         self.master.bind('<q>', self.quit)
         self.master.title('Regional IF Analyzer')
         self.master.geometry('%dx%d' % (self.master.winfo_screenwidth(), self.master.winfo_screenheight()))
@@ -785,20 +760,12 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             self.show_page()
 
     def import_tiff(self):
-        """Import and process TIFF image with enhanced error handling"""
         logger.info("Opening file dialog for TIFF selection")
-        try:
-            tiff_path = fd.askopenfilename(filetypes=[("TIFF files", "*.tiff *.tif")])
-            if not tiff_path:
-                return
-                
+        tiff_path = fd.askopenfilename(filetypes=[("TIFF files", "*.tiff *.tif")])
+        if tiff_path:
             logger.info(f"Opening TIFF file: {tiff_path}")
-            if not os.path.exists(tiff_path):
-                raise FileNotFoundError(f"Selected file does not exist: {tiff_path}")
-                
             self.tiff_filename = os.path.splitext(os.path.basename(tiff_path))[0]
-            try:
-                bg = Image.open(tiff_path)
+            bg = Image.open(tiff_path)
             array = np.array(bg)
             if array.ndim == 2 or (array.ndim == 3 and array.shape[2] == 1):
                 array = np.squeeze(array)
@@ -1164,10 +1131,19 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         if self.last_df is not None:
             self.last_df.to_excel(excel_path, index=False)
 
-        # Clear memory and reset state
-        self._reset_state()
-        self._clear_memory()
-        gc.collect()  # Force garbage collection
+        clear_preprocess_cache()
+        self.background_image = None
+        self.original_background = None
+        self.img = None
+        self.atlas_filetype = None
+        self.doc = None
+        self.page_images = {}
+        self.mask_images = {}
+        self.zone_counters = {}
+        self.zone_names = {}
+        self.last_df = None
+        self.img_x = 0
+        self.img_y = 0
 
         self.show_page()
         messagebox.showinfo("Next Image", f"Autosaved image to {image_path}\nAutosaved counts to {excel_path}" if self.last_df is not None else f"Autosaved image to {image_path}")
