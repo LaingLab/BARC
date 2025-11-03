@@ -447,9 +447,9 @@ class PDFViewer:
         self._build_adjustment_controls()
 
         # Next Image and Count Cell buttons
-        ttk.Button(self.bottom_frame, text="Next Image", command=self.next_image).pack(side=tk.LEFT, padx=8, pady=8)
-        self.count_button = ttk.Button(self.bottom_frame, text="Count Cells", command=self.count_cells)
-        self.count_button.pack(side=tk.LEFT, padx=10, pady=10)
+        ttk.Button(self.right_frame, text="Next Image", command=self.next_image).grid(row=7, padx=8, pady=8)
+        self.count_button = ttk.Button(self.right_frame, text="Count Cells", command=self.count_cells)
+        self.count_button.grid(row=8, padx=10, pady=10)
         self.count_button_packed = True
 
     def _build_adjustment_controls(self):
