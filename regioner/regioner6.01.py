@@ -21,9 +21,9 @@ import sys
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,       # For normal operations and major steps
+    # level=logging.INFO,       # For normal operations and major steps
     # level=logging.WARNING,    # For recoverable errors
-    # level=logging.DEBUG,        # For detailed operational information
+    level=logging.DEBUG,        # For detailed operational information
     # level=logging.ERROR,      # For critical issues
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
@@ -488,23 +488,43 @@ class PDFViewer:
         self.show_page()
 
     def save_paint(self):
-        # Hides background
+        """Save canvas paint strokes to an image without using postscript"""
+        # Hide background temporarily
         self.output.itemconfig(self.bg_photo_id, state='hidden')
-        # Captures the drawing
-        ww = self.output.winfo_width()
-        wh = self.output.winfo_height()
-        ps = self.output.postscript(colormode='color', pagewidth=ww-1, pageheight=wh-1)
-        # Shows background
+        
+        # Get canvas bounds
+        bbox = self.output.bbox("paint")  # Get bounds of items tagged with 'paint'
+        if not bbox:
+            logger.debug("No paint strokes to save")
+            return  # No paint to save
+            
+        x1, y1, x2, y2 = bbox
+        
+        # Create a new transparent image
+        img = Image.new('RGBA', (x2-x1, y2-y1), (0,0,0,0))
+        
+        # Draw each paint stroke onto the image
+        draw = ImageDraw.Draw(img)
+        for item in self.output.find_withtag('paint'):
+            coords = self.output.coords(item)
+            # Adjust coordinates relative to bbox
+            adjusted_coords = [c - x1 if i % 2 == 0 else c - y1 for i, c in enumerate(coords)]
+            width = self.output.itemcget(item, 'width')
+            fill = self.output.itemcget(item, 'fill')
+            draw.line(adjusted_coords, fill=fill, width=int(float(width)))
+        
+        # Show background again
         self.output.itemconfig(self.bg_photo_id, state='normal')
-        # Convert img from postscript
-        draw = Image.open(io.BytesIO(ps.encode('utf-8')))
-        img = draw.convert(mode='RGBA') 
-        # Processes and sets photo to be displayed
-        self.img = self.img_white_to_transparent(img)
-        self.photo = ImageTk.PhotoImage(self.img)
+        
+        # Set as current image
+        self.img = img
+        self.photo = ImageTk.PhotoImage(img)
         self.atlas_filetype = 'img'
-        # Removes the drawing from the canvas
+        
+        # Clear the canvas drawings
         self.output.delete('paint')
+        
+        logger.debug("Paint strokes saved to image successfully")
 
     def use_pen(self):
         self.activate_button(self.pen_button)
@@ -535,7 +555,18 @@ class PDFViewer:
     def show_mask_settings(self):
         settings_win = Toplevel(self.master)
         settings_win.title("Mask Settings")
-        # settings_win.geometry("400x400")
+        settings_win.geometry("200x400")
+
+        def save_settings():
+            self.image_processor.cell_config.threshold_method = ThresholdMethod(threshold_var.get())
+            self.image_processor.save_config()
+            settings_win.destroy()
+
+        def load_settings():
+            self.image_processor.load_config()
+
+        ttk.Button(settings_win, text="Save", command=save_settings).pack(pady=5)
+        ttk.Button(settings_win, text="Load", command=load_settings).pack(pady=5)
 
         # Add settings widgets here
         ttk.Label(settings_win, text="Cell Detection Settings").pack(pady=10)
@@ -599,16 +630,7 @@ class PDFViewer:
 
             entry.bind("<FocusOut>", create_setter(attr))
 
-        def save_settings():
-            self.image_processor.cell_config.threshold_method = ThresholdMethod(threshold_var.get())
-            self.image_processor.save_config()
-            settings_win.destroy()
 
-        def load_settings():
-            self.image_processor.load_config()
-
-        ttk.Button(settings_win, text="Save", command=save_settings).pack(pady=5)
-        ttk.Button(settings_win, text="Load", command=load_settings).pack(pady=5)
 
     def update_brightness(self, value):
         self.brightness = float(value)
@@ -689,11 +711,15 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
                     img = self.pdf_handler.render_page(self.current_page, self.zoom)
                 elif self.atlas_filetype == 'img':
                     img = self.img
+                logger.debug(f"Creating new page image: mode={img.mode}, size={img.size}")
                 self.page_images[self.current_page] = img
                 self.mask_images[self.current_page] = Image.new('L', (img.width, img.height), 0)
                 self.zone_counters[self.current_page] = 0
                 self.zone_names[self.current_page] = {}
-            return self.page_images[self.current_page]
+            
+            current_img = self.page_images[self.current_page]
+            logger.debug(f"Loaded page image: mode={current_img.mode}, size={current_img.size}")
+            return current_img
 
     def show_page(self, mask=None):
         img = self.load_page_image() or Image.new('RGBA', (1, 1), (0, 0, 0, 0))
@@ -1017,12 +1043,19 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         img = self.load_page_image()
         if x < 0 or y < 0 or x >= img.width or y >= img.height:
+            logger.debug("Click outside image boundaries")
             return
 
         barrier_img = preprocess_for_highlighting(self.current_page, img)
-        seed_value = barrier_img.getpixel((x, y))
-        if seed_value != 255:
-            return  # clicked a barrier
+        try:
+            seed_value = barrier_img.getpixel((x, y))
+            logger.debug(f"Seed value at click point: {seed_value}")
+            if seed_value != 255:
+                logger.debug("Clicked on a barrier")
+                return  # clicked a barrier
+        except Exception as e:
+            logger.error(f"Error getting pixel value: {e}")
+            return
 
         self.zone_counters[self.current_page] += 1
         zone_id = self.zone_counters[self.current_page]
@@ -1323,16 +1356,27 @@ def preprocess_for_highlighting(page_id, img):
     if page_id in _PREPROCESS_CACHE:
         return _PREPROCESS_CACHE[page_id]
     
+    logger.debug(f"Processing image for highlighting: mode={img.mode}, size={img.size}")
+    
+    # Convert to RGBA if not already
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+    
     img_array = np.array(img)
-    gray = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140]).astype(np.float32)
-    mag = filters.sobel(gray)
-    closed_binary = binary_closing(mag)
-    skel_binary = morphology.skeletonize(closed_binary)
+    
+    # Extract the alpha channel - non-transparent pixels are our barriers
+    alpha = img_array[..., 3]
+    
+    # Create barrier image: 255 for areas we can flood (transparent), 0 for barriers (non-transparent)
     barrier = np.ones((img.height, img.width), dtype=np.uint8) * 255
-    barrier[skel_binary] = 0
+    barrier[alpha > 0] = 0  # Non-transparent pixels become barriers
+    
     barrier_img = Image.new('L', (img.width, img.height))
     barrier_img.putdata(barrier.flatten())
+    
+    logger.debug(f"Created barrier image with mode={barrier_img.mode}")
     _PREPROCESS_CACHE[page_id] = barrier_img
+    
     return barrier_img
 
 def clear_preprocess_cache():
