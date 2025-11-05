@@ -515,7 +515,11 @@ class PDFViewer:
             logger.debug("No paint strokes to save")
             return  # No paint to save
             
+        # Get coordinates of entire painting area
         x1, y1, x2, y2 = bbox
+        # Modify coords so painting stays in the same place after conversion
+        x1 = 0
+        y1 = 0
         
         # Create a new transparent image
         img = Image.new('RGBA', (x2-x1, y2-y1), (0,0,0,0))
@@ -1346,7 +1350,7 @@ def count_cells_in_zones(background_pil, mask_pil, page_pil, img_x, img_y, zone_
     # Include manual mask edits if provided
     if page_pil is not None:
         binary = np.array(page_pil) #> 0
-        
+
     logger.debug("Performing distance transform for watershed")
     distance = distance_transform_edt(binary)
 
