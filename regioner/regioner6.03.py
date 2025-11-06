@@ -11,6 +11,7 @@ from scipy.ndimage import distance_transform_edt
 from scipy import ndimage as ndi
 from dataclasses import dataclass
 import enum
+import math
 
 import pandas as pd
 import os
@@ -350,6 +351,9 @@ class PDFViewer:
         # Brightness
         self.brightness = 0.0
 
+        # Init windows
+        self.brush_win = None
+
         # Build GUI
         self._build_gui()
 
@@ -358,17 +362,21 @@ class PDFViewer:
     def quit(self, master):
         self.master.destroy()
 
+    def disable_event(self):
+        pass
+
     def _build_gui(self):
         # Menu
         self.menu = tk.Menu(self.master)
         self.master.config(menu=self.menu)
 
-        # Create File menu dropdown
+        # Create File menu dropdown 
         filemenu = tk.Menu(self.menu)
         self.menu.add_cascade(label="File", menu=filemenu)
-        filemenu.add_command(label="Next Image", command=self.next_image)
+        filemenu.add_command(label="Import Tiff", command=self.import_tiff)
         filemenu.add_command(label="Import Atlas Section", command=self.open_file)
         filemenu.add_command(label="Save Flattened Image", command=self.save_flattened_image)
+        filemenu.add_command(label="Next Image", command=self.next_image)
         filemenu.add_command(label="Help", command=self.show_help)
         filemenu.add_command(label="Exit", command=self.master.destroy)
 
@@ -397,7 +405,7 @@ class PDFViewer:
         paintmenu.add_command(label="Pen", command=self.use_pen)
         paintmenu.add_command(label="Eraser", command=self.use_eraser)
         # Spawn new windows with widgets
-        # paintmenu.add_command(label="Brushsize", command=lambda: print('Brushsize', file=sys.stderr))
+        paintmenu.add_command(label="Brushsize", command=self.show_brush_settings)
         
         # Create Mask menu dropdown
         maskmenu = tk.Menu(self.menu)
@@ -412,7 +420,7 @@ class PDFViewer:
         # Create Cell menu dropdown
         cellmenu = tk.Menu(self.menu)
         self.menu.add_cascade(label="Cell", menu=cellmenu)
-            # This might turn into a command that counts the cells
+        cellmenu.add_command(label="Count Cells", command=self.count_cells)
 
         # Add highlight regions button to manually enable this
 
@@ -543,9 +551,6 @@ class PDFViewer:
         # Brightness and sensitivity controls
         self._build_adjustment_controls()
 
-
-
-
     def _build_adjustment_controls(self):
         # Brightness slider
         self.brightness_label = ttk.Label(self.bottom_frame, text="Brightness:")
@@ -564,11 +569,14 @@ class PDFViewer:
         self.sensitivity_value_entry.pack(side=tk.LEFT, padx=4, pady=8)
 
     def start_paint(self):
+        self.brush_size = tk.IntVar()
+        self.show_brush_settings()
+        self.lines_dict = {}
         self.old_x = None
         self.old_y = None
-        self.line_width = self.choose_size_button.get()
+        #self.line_width = self.choose_size_button.get()
         self.color = self.DEFAULT_COLOR
-        self.active_button = self.pen_button
+        self.active_button = None
         self.use_pen()
         self.output.unbind("<Button-1>")
         self.output.bind('<B1-Motion>', self.paint)
@@ -603,12 +611,20 @@ class PDFViewer:
         
         # Draw each paint stroke onto the image
         draw = ImageDraw.Draw(img)
-        for item in self.output.find_withtag('paint'):
-            coords = self.output.coords(item)
+#        for item in self.output.find_withtag('paint'):
+#            coords = self.output.coords(item)
+#            # Adjust coordinates relative to bbox
+#            adjusted_coords = [c - x1 if i % 2 == 0 else c - y1 for i, c in enumerate(coords)]
+#            width = self.output.itemcget(item, 'width')
+#            fill = self.output.itemcget(item, 'fill')
+#            draw.line(adjusted_coords, fill=fill, width=int(float(width)))
+
+        for line, coords in self.lines.items():
+            #coords = self.output.coords(item)
             # Adjust coordinates relative to bbox
             adjusted_coords = [c - x1 if i % 2 == 0 else c - y1 for i, c in enumerate(coords)]
-            width = self.output.itemcget(item, 'width')
-            fill = self.output.itemcget(item, 'fill')
+            width = self.output.itemcget(line, 'width')
+            fill = self.output.itemcget(line, 'fill')
             draw.line(adjusted_coords, fill=fill, width=int(float(width)))
         
         # Show background again
@@ -625,31 +641,65 @@ class PDFViewer:
         logger.debug("Paint strokes saved to image successfully")
 
     def use_pen(self):
-        self.activate_button(self.pen_button)
+        # self.activate_button("Pen")
+        self.output.bind('<B1-Motion>', self.paint)
 
     def use_eraser(self):
-        self.activate_button(self.eraser_button, eraser_mode=True)
+        # self.activate_button("Eraser", eraser_mode=True)
+        self.output.bind('<B1-Motion>', self.erase)
 
     def activate_button(self, some_button, eraser_mode=False):
-        self.active_button.config(relief='raised')
-        some_button.config(relief='sunken')
         self.active_button = some_button
         self.eraser_on = eraser_mode
 
     def paint(self, event):
-        self.line_width = self.choose_size_button.get()
-        paint_color = 'white' if self.eraser_on else self.color
+        self.line_width = self.brush_size.get()
+        # paint_color = 'white' if self.eraser_on else self.color
+        paint_color = self.color
         if self.old_x and self.old_y:
-            self.output.create_line(self.old_x, self.old_y, event.x, event.y,
+            current_line = self.output.create_line(self.old_x, self.old_y, event.x, event.y,
                                width=self.line_width, fill=paint_color,
                                capstyle=tk.ROUND, smooth=tk.TRUE, splinesteps=36,
                                tags='paint')
+            self.lines_dict[current_line] = self.output.coords(current_line)
         self.old_x = event.x
         self.old_y = event.y
+    
+    def erase(self, event):
+        if len(self.lines_dict) == 0:
+            return
+        # Checks if any paint is within brush range
+        line_tuple = self.output.find_closest(event.x, event.y)
+        x0, y0, x1, y1 = self.output.coords(line_tuple[0])
+        distance = self.distance_to_line(event.x, event.y, x0, y0, x1, y1)
+        brush = self.brush_size.get()
+        if distance >= brush:
+            return
+        # Removes all paint within brush range
+        for item in self.output.find_enclosed(event.x-brush, event.y-brush, event.x+brush, event.y+brush):
+            objectToBeDeleted = item
+            del self.lines_dict[objectToBeDeleted]
+            self.output.delete(objectToBeDeleted)
 
     def reset(self, event):
         self.old_x, self.old_y = None, None
 
+    def distance_to_line(self, px, py, x0, y0, x1, y1):
+        return abs((y1 - y0) * px - (x1 - x0) * py + x1 * y0 - y1 * x0) / (math.sqrt((y1 - y0)**2 + (x1 - x0)**2) + 1)
+
+    def show_brush_settings(self):
+        brush_win = self.brush_win
+        if self.brush_win:
+            self.brush_win.state('normal')
+            return
+        self.brush_win = Toplevel(self.master)
+        self.brush_win.title("Brush Settings")
+        self.brush_win.attributes('-topmost', 'true')
+        self.brush_win.protocol("WM_DELETE_WINDOW", self.disable_event)
+        self.choose_size_button = tk.Scale(self.brush_win, from_=1, to=10, orient=tk.HORIZONTAL, variable=self.brush_size)
+        self.choose_size_button.set(self.DEFAULT_PEN_SIZE)
+        self.choose_size_button.grid(row=2, column=0, pady=5)
+        tk.Button(self.brush_win, text="Close", command=lambda: self.brush_win.withdraw()).grid(row=3, column=0, pady=5)
 
     def show_scale_settings(self):
         scale_win = Toplevel(self.master)
