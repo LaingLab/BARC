@@ -312,7 +312,7 @@ class PDFViewer:
         self.undo_stack = self.state_manager.undo_stack
 
         # Paint variables
-        self.DEFAULT_PEN_SIZE = 3.0
+        self.brush_size = tk.IntVar(value=3.0)
         self.DEFAULT_COLOR = 'black'
 
         # Crop / edit variables
@@ -350,6 +350,12 @@ class PDFViewer:
 
         # Brightness
         self.brightness = 0.0
+
+        # Sensitivity
+        self.sensitivity_var = tk.IntVar(value=50)
+
+        # Mouse state tracking
+        self.current_state = None
 
         # Init windows
         self.brush_win = None
@@ -569,7 +575,9 @@ class PDFViewer:
         self.sensitivity_value_entry.pack(side=tk.LEFT, padx=4, pady=8)
 
     def start_paint(self):
-        self.brush_size = tk.IntVar()
+        if self.current_state == 'paint':
+            return
+        self.current_state = 'paint'
         self.show_brush_settings()
         self.lines_dict = {}
         self.old_x = None
@@ -586,6 +594,7 @@ class PDFViewer:
         self.output.unbind('<B1-Motion>')
         self.output.unbind('<ButtonRelease-1>') 
         self.output.bind('<Button-1>', self.highlight_region)
+        self.current_state = None
         self.save_paint()
         self.show_page()
 
@@ -619,14 +628,23 @@ class PDFViewer:
 #            fill = self.output.itemcget(item, 'fill')
 #            draw.line(adjusted_coords, fill=fill, width=int(float(width)))
 
-        for line, coords in self.lines.items():
-            #coords = self.output.coords(item)
-            # Adjust coordinates relative to bbox
-            adjusted_coords = [c - x1 if i % 2 == 0 else c - y1 for i, c in enumerate(coords)]
+        for line, coords in self.lines_dict.items():
+            # Instead of drawing a thick line, we draw a bunch of ellipses
             width = self.output.itemcget(line, 'width')
+            width = int(float(width))
             fill = self.output.itemcget(line, 'fill')
-            draw.line(adjusted_coords, fill=fill, width=int(float(width)))
-        
+            # draw.ellipse needs a bounding box, so we incorperate line width to the coords
+            x0, y0, x1, y1 = coords
+            x0 = min(x0, x1)    # ensures corners aren't flipped
+            x1 = max(x0, x1)
+            y0 = min(y0, y1)
+            y1 = max(y0, y1)
+            ex0 = x0 - width/2
+            ey0 = y0 - width/2
+            ey1 = y1 + width/2
+            ex1 = x1 + width/2
+            draw.ellipse((ex0, ey0, ex1, ey1), fill=fill, width=width)
+            
         # Show background again
         self.output.itemconfig(self.bg_photo_id, state='normal')
         
@@ -657,11 +675,15 @@ class PDFViewer:
         # paint_color = 'white' if self.eraser_on else self.color
         paint_color = self.color
         if self.old_x and self.old_y:
-            current_line = self.output.create_line(self.old_x, self.old_y, event.x, event.y,
+            coords = (self.old_x, self.old_y, event.x, event.y)
+            current_line = self.output.create_line(coords,
                                width=self.line_width, fill=paint_color,
                                capstyle=tk.ROUND, smooth=tk.TRUE, splinesteps=36,
                                tags='paint')
-            self.lines_dict[current_line] = self.output.coords(current_line)
+            # This can be removed, just pull the paint info from the canvas when saving
+            # This was added to facilitate the new eraser, but now the eraser doesnt even use it
+            # self.lines_dict[current_line] = self.output.coords(current_line)
+            self.lines_dict[current_line] = coords
         self.old_x = event.x
         self.old_y = event.y
     
@@ -669,14 +691,17 @@ class PDFViewer:
         if len(self.lines_dict) == 0:
             return
         # Checks if any paint is within brush range
-        line_tuple = self.output.find_closest(event.x, event.y)
+        x = event.x
+        y = event.y
+        line_tuple = self.output.find_closest(x, y)
         x0, y0, x1, y1 = self.output.coords(line_tuple[0])
-        distance = self.distance_to_line(event.x, event.y, x0, y0, x1, y1)
+        distance = self.distance_to_line(x, y, x0, y0, x1, y1)
         brush = self.brush_size.get()
-        if distance >= brush:
+        eraser_brush = brush * 1.5
+        if distance >= eraser_brush:
             return
-        # Removes all paint within brush range
-        for item in self.output.find_enclosed(event.x-brush, event.y-brush, event.x+brush, event.y+brush):
+        # Removes all paint within eraser_brush range
+        for item in self.output.find_enclosed(x-eraser_brush, y-eraser_brush, x+eraser_brush, y+eraser_brush):
             objectToBeDeleted = item
             del self.lines_dict[objectToBeDeleted]
             self.output.delete(objectToBeDeleted)
@@ -685,21 +710,20 @@ class PDFViewer:
         self.old_x, self.old_y = None, None
 
     def distance_to_line(self, px, py, x0, y0, x1, y1):
-        return abs((y1 - y0) * px - (x1 - x0) * py + x1 * y0 - y1 * x0) / (math.sqrt((y1 - y0)**2 + (x1 - x0)**2) + 1)
+        # denom has +1e8 to prevent divide by zero errors
+        return abs((y1 - y0) * px - (x1 - x0) * py + x1 * y0 - y1 * x0) / (math.sqrt((y1 - y0)**2 + (x1 - x0)**2) + 1e8)
 
-    def show_brush_settings(self):
-        brush_win = self.brush_win
-        if self.brush_win:
-            self.brush_win.state('normal')
-            return
-        self.brush_win = Toplevel(self.master)
-        self.brush_win.title("Brush Settings")
-        self.brush_win.attributes('-topmost', 'true')
-        self.brush_win.protocol("WM_DELETE_WINDOW", self.disable_event)
-        self.choose_size_button = tk.Scale(self.brush_win, from_=1, to=10, orient=tk.HORIZONTAL, variable=self.brush_size)
-        self.choose_size_button.set(self.DEFAULT_PEN_SIZE)
-        self.choose_size_button.grid(row=2, column=0, pady=5)
-        tk.Button(self.brush_win, text="Close", command=lambda: self.brush_win.withdraw()).grid(row=3, column=0, pady=5)
+    def show_brush_settings(self): # This is the layout to be applied to all other spawned windows
+        window = self.brush_win
+        window = Toplevel(self.master)
+        window.attributes('-topmost', 'true')
+        window.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        window.title("Brush Settings")
+        tk.Label(window, text="Brush Size: ").grid(row=2, column=0)
+        self.choose_size_button = tk.Scale(window, from_=1, to=10, orient=tk.HORIZONTAL, variable=self.brush_size)
+        self.choose_size_button.grid(row=2, column=1, padx=5, pady=5)
+        tk.Button(window, text="Close", command=lambda: window.destroy()).grid(row=3, column=1, sticky=tk.SE, padx=5, pady=5)
 
     def show_scale_settings(self):
         scale_win = Toplevel(self.master)
@@ -741,7 +765,6 @@ class PDFViewer:
         sensitivity_win.attributes('-topmost', 'true')
         self.sensitivity_label = ttk.Label(sensitivity_win, text="Sensitivity:")
         self.sensitivity_label.pack(side=tk.LEFT, padx=8, pady=8)
-        self.sensitivity_var = tk.IntVar(value=50)
         self.sensitivity_slider = tk.Scale(sensitivity_win, from_=0, to=100, orient=tk.HORIZONTAL, variable=self.sensitivity_var)
         self.sensitivity_slider.pack(side=tk.LEFT, padx=4, pady=8)
         self.sensitivity_value_entry = ttk.Entry(sensitivity_win, textvariable=self.sensitivity_var, width=4)
@@ -860,8 +883,9 @@ class PDFViewer:
         self.editing_mask = True
         self.mask_edit_add = add
         self.output.unbind("<Button-1>")
+        self.output.bind("<Button-1>", self.edit_mask_draw)
         self.output.bind("<B1-Motion>", self.edit_mask_draw)
-        self.output.bind("<ButtonRelease-1>", self.stop_mask_edit)
+        self.output.bind("<ButtonRelease-1>", self.show_cell_mask_threshold)
         
         # Initialize the correct mask depending on edit mode
         base_size = self.original_background.size
@@ -885,10 +909,11 @@ class PDFViewer:
 
         x = int(self.output.canvasx(event.x))
         y = int(self.output.canvasy(event.y))
-        r = int(self.choose_size_button.get())
+        r = int(self.brush_size.get())
 
         draw = ImageDraw.Draw(self.current_mask)
-        color = 255 if self.mask_edit_add else 0
+        #color = 255 # if self.mask_edit_add else 0
+        color = "blue"
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
 
         # --- Visualization fix ---
@@ -1174,12 +1199,10 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         self.save_state()
         self.crop_mode = not self.crop_mode
         if self.crop_mode:
-            self.crop_button.configure(style='On.TButton')
             self.output.bind("<Button-1>", self.crop_start)
             self.output.bind("<B1-Motion>", self.crop_drag)
             self.output.bind("<ButtonRelease-1>", self.crop_end)
         else:
-            self.crop_button.configure(style='TButton')
             self.output.bind("<Button-1>", self.highlight_region)
             self.output.unbind("<B1-Motion>")
             self.output.unbind("<ButtonRelease-1>")
@@ -1224,11 +1247,9 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         self.save_state()
         self.edit_mode = not self.edit_mode
         if self.edit_mode:
-            self.move_button.configure(style='On.TButton')
             self.output.bind("<Button-1>", self.drag_start)
             self.output.bind("<B1-Motion>", self.drag_move)
         else:
-            self.move_button.configure(style='TButton')
             self.output.bind("<Button-1>", self.highlight_region)
             self.output.unbind("<B1-Motion>")
 
@@ -1329,7 +1350,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             logger.debug("Click outside image boundaries")
             return
 
-        barrier_img = preprocess_for_highlighting(self.current_page, img)
+        barrier_img = preprocess_for_highlighting(self.current_page, img, self.atlas_filetype)
         try:
             seed_value = barrier_img.getpixel((x, y))
             logger.debug(f"Seed value at click point: {seed_value}")
@@ -1379,7 +1400,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         # === Build Final Cell Mask ===
         background = self.original_background.convert('L')
-        _, auto_labels = binary_mask_cell_count(background, self.sensitivity_slider.get())
+        _, auto_labels = binary_mask_cell_count(background, self.sensitivity_var.get())
         auto_mask = auto_labels > 0  # Boolean array
 
         # Convert manual edit masks to boolean arrays
@@ -1418,7 +1439,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             self.img_y,
             self.zone_counters,
             self.zone_names.get(self.current_page, {}),
-            self.sensitivity_slider.get()
+            self.sensitivity_var.get()
         )
 
         self.background_image = annotated
@@ -1432,12 +1453,12 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         else:
             messagebox.showinfo("Cell Counts", f"Cell counts per zone: {dict(zip(df['Zone'], df['Cell_Count']))}")
 
-    def show_cell_mask_threshold(self):
+    def show_cell_mask_threshold(self, event=None):
         """Display the combined (auto + manual) mask overlay"""
         background = self.original_background.convert('L')
 
         # Run automatic detection
-        _, auto_labels = binary_mask_cell_count(background, self.sensitivity_slider.get())
+        _, auto_labels = binary_mask_cell_count(background, self.sensitivity_var.get())
         auto_mask = auto_labels > 0
 
         base_size = background.size
@@ -1446,10 +1467,10 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         # Load manual add/remove masks if present
         if self.manual_add_mask is not None:
-            add_mask_arr = np.array(self.manual_add_mask.resize(base_size, Image.NEAREST))
+            add_mask_arr = np.array(self.manual_add_mask) #.resize(base_size, Image.NEAREST))
             add_mask = add_mask_arr > 0
         if self.manual_remove_mask is not None:
-            remove_mask_arr = np.array(self.manual_remove_mask.resize(base_size, Image.NEAREST))
+            remove_mask_arr = np.array(self.manual_remove_mask) #.resize(base_size, Image.NEAREST))
             remove_mask = remove_mask_arr > 0
 
         # Combine automatic and manual edits
@@ -1462,7 +1483,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         red_overlay[combined_mask] = [255, 0, 0]
 
         alpha = 0.5
-        vis_array = ((1 - alpha) * vis_array + alpha * red_overlay).astype(np.uint8)
+        vis_array = (vis_array + alpha * red_overlay).astype(np.uint8)
 
         mask_img = Image.fromarray(vis_array)
         mask_img = mask_img.resize(self.original_background.size, Image.NEAREST)
@@ -1680,13 +1701,29 @@ class PDFHandler:
 # Initialize global cache for preprocessing
 _PREPROCESS_CACHE = {}
 
-def preprocess_for_highlighting(page_id, img):
+def preprocess_for_highlighting(page_id, img, atlas_filetype):
     """Preprocess an image for region highlighting"""
     if page_id in _PREPROCESS_CACHE:
         return _PREPROCESS_CACHE[page_id]
     
     logger.debug(f"Processing image for highlighting: mode={img.mode}, size={img.size}")
-    
+
+    if atlas_filetype == 'pdf':
+        img_array = np.array(img)
+        # Convert to gray for edge detection
+        gray = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140]).astype(np.float32)
+        # Edge detection
+        mag = filters.sobel(gray)
+        # Close dotted lines
+        closed_binary = binary_closing(mag)
+        # Make bounds as thin as possible
+        skel_binary = morphology.skeletonize(closed_binary)
+        barrier = np.ones((img.height, img.width), dtype=np.uint8) * 255
+        barrier[skel_binary] = 0
+        barrier_img = Image.new('L', (img.width, img.height))
+        barrier_img.putdata(barrier.flatten())
+        return barrier_img
+
     # Convert to RGBA if not already
     if img.mode != 'RGBA':
         img = img.convert('RGBA')
@@ -1695,7 +1732,7 @@ def preprocess_for_highlighting(page_id, img):
     
     # Extract the alpha channel - non-transparent pixels are our barriers
     alpha = img_array[..., 3]
-    
+
     # Create barrier image: 255 for areas we can flood (transparent), 0 for barriers (non-transparent)
     barrier = np.ones((img.height, img.width), dtype=np.uint8) * 255
     barrier[alpha > 0] = 0  # Non-transparent pixels become barriers
