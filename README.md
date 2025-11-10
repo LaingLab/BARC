@@ -51,13 +51,20 @@ python3 regioner6.00.py
 
 ## Basic Usage
 
-1. **Import Atlas Section**:
-   - Click "File > Import Atlas Section"
-   - Select your PDF atlas file
-
-2. **Import TIFF Image**:
-   - Click "Import TIFF"
+1. **Import TIFF Image**:
+   - Click "File > Import TIFF"
    - Select your TIFF image file
+
+2. **Determine Regions**
+
+   a. *Draw Region of Interest*:
+      - Click "Paint > Start Paint"
+      - Draw a circle around the ROI
+      - Once done, click "Paint > Stop Paint"
+   
+   b. *Import Atlas Section*:
+      - Click "File > Import Atlas Section"
+      - Select your PDF atlas file
 
 3. **Align Atlas**:
    - Use "Move Atlas" button to position the atlas over your image
@@ -67,8 +74,12 @@ python3 regioner6.00.py
    - Click on regions to highlight them
    - Name each region when prompted
 
-5. **Count Cells**:
-   - Adjust sensitivity using the slider if needed
+5. **Verify Mask**:
+   - Click "Mask > Show Mask"
+   - Adjust detection with "Mask > Show Mask Settings"
+   - Manually add and remove cells under "Mask > Add/Remove Cells"
+
+7. **Count Cells**:
    - Click "Count Cells" to analyze
    - Save results to Excel when prompted
 
