@@ -3,7 +3,7 @@ __pycache__
 *.xlsx
 
 # test directory
-regioner/test/
+regioner/Random_code/
 
 # collection of thoughts
 NOTES

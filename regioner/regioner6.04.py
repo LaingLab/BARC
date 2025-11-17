@@ -638,7 +638,7 @@ class PDFViewer:
             # Draw lines as points for roundness to fill jagged edges
             for (px, py) in points:
                 draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=fill)
-                
+
             # Draw lines as lines for fast-drawn lines
             draw.line(points, fill=fill, width=width, joint="curve")
 
@@ -929,8 +929,7 @@ class PDFViewer:
         r = int(self.brush_size.get())
 
         draw = ImageDraw.Draw(self.current_mask)
-        #color = 255 # if self.mask_edit_add else 0
-        color = "blue"
+        color = 255
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
 
         # --- Visualization fix ---
@@ -1736,7 +1735,7 @@ def preprocess_for_highlighting(page_id, img, atlas_filetype):
 
         barrier = np.ones((img.height, img.width), dtype=np.uint8) * 255
         barrier[skel_binary > 0] = 0
-        barrier_img = Image.fromarray(barrier, mode='L')
+        barrier_img = Image.fromarray(barrier.astype('uint8')).convert('L')
         # Cache the result so repeated calls are fast
         _PREPROCESS_CACHE[page_id] = barrier_img
         return barrier_img
