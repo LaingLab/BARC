@@ -94,7 +94,7 @@ class ImageProcessor:
                         for key, value in cell_config.items():
                             if hasattr(self.cell_config, key):
                                 setattr(self.cell_config, key, value)
-                                
+                               
                     if 'preprocessing' in config:
                         for key, value in config['preprocessing'].items():
                             if hasattr(self.preprocess_config, key):
@@ -353,8 +353,8 @@ class PDFViewer:
         # Mouse state tracking
         self.current_state = None
 
-        # Init windows
-        self.brush_win = None
+        # Init windows (not needed, init windows when spawned)
+#       self.brush_win = None
 
         # Build GUI
         self._build_gui()
@@ -460,118 +460,7 @@ class PDFViewer:
         self.scrolly.configure(command=self.output.yview)
         self.scrollx.configure(command=self.output.xview)
 
-        
-        
-
-        
-        
-
-    def neverCallingThisFunction():
-        # Frames
-        self.top_frame = ttk.Frame(self.master)
-        self.top_frame.grid(row=0, column=0, sticky='nsew')
-        self.top_frame.rowconfigure(0, weight=1)
-        self.top_frame.columnconfigure(0, weight=1)
-
-        self.bottom_frame = ttk.Frame(self.master)
-        self.bottom_frame.grid(row=1, column=0, sticky='ew')
-
-        self.right_frame = ttk.Frame(self.master)
-        self.right_frame.grid(row=0, column=2, sticky='nsw')
-
-        # Scrollbars and canvas
-        self.scrolly = ttk.Scrollbar(self.top_frame, orient=tk.VERTICAL)
-        self.scrolly.grid(row=0, column=1, sticky='ns')
-        self.scrollx = ttk.Scrollbar(self.top_frame, orient=tk.HORIZONTAL)
-        self.scrollx.grid(row=1, column=0, sticky='ew')
-
-        self.output = tk.Canvas(self.top_frame, bg='#ECE8F3')
-        self.output.configure(yscrollcommand=self.scrolly.set, xscrollcommand=self.scrollx.set)
-        self.output.grid(row=0, column=0, sticky='nsew')
-        self.scrolly.configure(command=self.output.yview)
-        self.scrollx.configure(command=self.output.xview)
-
-        # Paint tools
-        self.pen_button = tk.Button(self.right_frame, text='pen', command=self.use_pen)
-        self.pen_button.grid(row=0, column=0, pady=5)
-
-        self.eraser_button = tk.Button(self.right_frame, text='eraser', command=self.use_eraser)
-        self.eraser_button.grid(row=1, column=0, pady=5)
-
-        self.choose_size_button = tk.Scale(self.right_frame, from_=1, to=10, orient=tk.HORIZONTAL)
-        self.choose_size_button.set(self.DEFAULT_PEN_SIZE)
-        self.choose_size_button.grid(row=2, column=0, pady=5)
-
-        # Bind click event for highlighting
-        self.output.bind("<Button-1>", self.highlight_region)
-
-        # Control buttons
-        self._build_control_buttons()
-        
-        # Keyboard shortcuts
-        self.master.bind('<Control-z>', self._undo_event)
-        self.master.bind('<Control-s>', self.save_flattened_image)
-
-        # Paint buttons
-        ttk.Button(self.right_frame, text="Start Paint", command=self.start_paint).grid(row=3, column=0, pady=5)
-        ttk.Button(self.right_frame, text="Stop Paint", command=self.stop_paint).grid(row=4, column=0, pady=5)
-        ttk.Button(self.right_frame, text="Show Mask", command=self.show_cell_mask_threshold).grid(row=5, column=0, pady=5)
-        ttk.Button(self.right_frame, text="Show Mask Settings", command=self.show_mask_settings).grid(row=6, column=0, pady=5)
-
-        # Next Image and Count Cell buttons
-        ttk.Button(self.right_frame, text="Next Image", command=self.next_image).grid(row=7, padx=8, pady=8)
-        self.count_button = ttk.Button(self.right_frame, text="Count Cells", command=self.count_cells)
-        self.count_button.grid(row=8, padx=10, pady=10)
-        self.count_button_packed = True
-
-        # Mask editing buttons
-        ttk.Button(self.right_frame, text="Add Cells", command=self.start_add_cells).grid(row=9, padx=8, pady=4)
-        ttk.Button(self.right_frame, text="Remove Cells", command=self.start_remove_cells).grid(row=10, padx=8, pady=4)
-        ttk.Button(self.right_frame, text="Finish Mask Edit", command=self.stop_mask_edit).grid(row=11, padx=8, pady=4)
-
-    def _build_control_buttons(self):
-        # Crop Button
-        self.crop_button = ttk.Button(self.bottom_frame, text="Crop", command=self.toggle_crop_mode)
-        self.crop_button.pack(side=tk.LEFT, padx=8, pady=8)
-        
-        # Atlas Button
-        self.style = ttk.Style()
-        self.style.configure('On.TButton', background='lightgreen')
-        self.move_button = ttk.Button(self.bottom_frame, text="Move Atlas", command=self.toggle_edit_mode)
-        self.move_button.pack(side=tk.LEFT, padx=10, pady=10)
-
-        # Import Tiff button
-        ttk.Button(self.bottom_frame, text="Import TIFF", command=self.import_tiff).pack(side=tk.LEFT, padx=10, pady=10)
-
-        # Rotation controls
-        self.rotation_label = ttk.Label(self.bottom_frame, text="Rotate (degrees):")
-        self.rotation_label.pack(side=tk.LEFT, padx=10, pady=10)
-        self.rotation_entry = ttk.Entry(self.bottom_frame, width=10)
-        self.rotation_entry.pack(side=tk.LEFT, padx=5, pady=10)
-        ttk.Button(self.bottom_frame, text="Rotate", command=self.rotate_custom).pack(side=tk.LEFT, padx=10, pady=10)
-
-        # Scale controls
-        self.scale_label = ttk.Label(self.bottom_frame, text="Scale:")
-        self.scale_label.pack(side=tk.LEFT, padx=10, pady=10)
-        self.scale_entry = ttk.Entry(self.bottom_frame, width=10)
-        self.scale_entry.pack(side=tk.LEFT, padx=5, pady=10)
-
-        # Resize buttons
-        ttk.Button(self.bottom_frame, text="Resize", command=self.resize_custom).pack(side=tk.LEFT, padx=8, pady=8)
-        ttk.Button(self.bottom_frame, text="Resize X", command=self.resize_x).pack(side=tk.LEFT, padx=8, pady=8)
-        ttk.Button(self.bottom_frame, text="Resize Y", command=self.resize_y).pack(side=tk.LEFT, padx=8, pady=8)
-
-        # Brightness controls
-        self._build_adjustment_controls()
-
-    def _build_adjustment_controls(self):
-        # Brightness slider
-        self.brightness_label = ttk.Label(self.bottom_frame, text="Brightness:")
-        self.brightness_label.pack(side=tk.LEFT, padx=8, pady=8)
-        self.brightness_slider = ttk.Scale(self.bottom_frame, from_=-100, to=400, orient=tk.HORIZONTAL, command=self.update_brightness)
-        self.brightness_slider.pack(side=tk.LEFT, padx=4, pady=8)
-        self.brightness_slider.set(0)
-
+    # End of UI, beginning of functions
     def start_paint(self):
         if self.current_state == 'paint':
             return
@@ -750,79 +639,106 @@ class PDFViewer:
         return math.hypot(px - proj_x, py - proj_y)
 
     def show_brush_settings(self): # This is the layout to be applied to all other spawned windows
-        window = self.brush_win
+        brush_win = None
+        window = brush_win
         window = Toplevel(self.master)
         window.attributes('-topmost', 'true')
         window.protocol("WM_DELETE_WINDOW", self.disable_event)
 
         window.title("Brush Settings")
         tk.Label(window, text="Brush Size: ").grid(row=2, column=0)
-        self.choose_size_button = tk.Scale(window, from_=1, to=10, orient=tk.HORIZONTAL, variable=self.brush_size)
-        self.choose_size_button.grid(row=2, column=1, padx=5, pady=5)
-        tk.Button(window, text="Close", command=lambda: window.destroy()).grid(row=3, column=1, sticky=tk.SE, padx=5, pady=5)
+        choose_size_button = tk.Scale(window, from_=1, to=10, orient=tk.HORIZONTAL, variable=self.brush_size)
+        choose_size_button.grid(row=2, column=1, padx=5, pady=5)
+        # Close button
+        close_button = tk.Button(window, text="Close", command=lambda: window.destroy())
+        close_button.grid(row=10, column=1, sticky=tk.SE, padx=5, pady=5)
 
     def show_scale_settings(self):
-        scale_win = Toplevel(self.master)
-        scale_win.title("Scale Settings")
-        scale_win.attributes('-topmost', 'true')
+        scale_win = None
+        window = scale_win
+        window = Toplevel(self.master)
+        window.attributes('-topmost', 'true')
+        window.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        window.title("Scale Settings")
         # Scale controls
-        self.scale_label = ttk.Label(scale_win, text="Scale:")
-        self.scale_label.pack(side=tk.LEFT, padx=10, pady=10)
-        self.scale_entry = ttk.Entry(scale_win, width=10)
-        self.scale_entry.pack(side=tk.LEFT, padx=5, pady=10)
+        scale_label = ttk.Label(window, text="Scale:")
+        scale_label.grid(row=0, column=0, columnspan=2)
+        self.scale_entry = ttk.Entry(window, width=10)
+        self.scale_entry.grid(row=0, column=2, padx=5, pady=5)
         # Resize buttons
-        ttk.Button(scale_win, text="Resize", command=self.resize_custom).pack(side=tk.LEFT, padx=8, pady=8)
-        ttk.Button(scale_win, text="Resize X", command=self.resize_x).pack(side=tk.LEFT, padx=8, pady=8)
-        ttk.Button(scale_win, text="Resize Y", command=self.resize_y).pack(side=tk.LEFT, padx=8, pady=8)
+        ttk.Button(window, text="Resize", command=self.resize_custom).grid(row=1, column=0, padx=5, pady=5)
+        ttk.Button(window, text="Resize X", command=self.resize_x).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(window, text="Resize Y", command=self.resize_y).grid(row=1, column=2, padx=5, pady=5)
+        # Close button
+        close_button = tk.Button(window, text="Close", command=lambda: window.destroy())
+        close_button.grid(row=10, column=2, sticky=tk.SE, padx=5, pady=5)
 
     def show_rotate_settings(self):
-        rotate_win = Toplevel(self.master)
-        rotate_win.title("Rotate Settings")
-        rotate_win.attributes('-topmost', 'true')
-        self.rotation_label = ttk.Label(rotate_win, text="Rotate (degrees):")
-        self.rotation_label.pack(side=tk.LEFT, padx=10, pady=10)
-        self.rotation_entry = ttk.Entry(rotate_win, width=10)
-        self.rotation_entry.pack(side=tk.LEFT, padx=5, pady=10)
-        ttk.Button(rotate_win, text="Rotate", command=self.rotate_custom).pack(side=tk.LEFT, padx=10, pady=10)
+        rotate_win = None
+        window = rotate_win
+        window = Toplevel(self.master)
+        window.attributes('-topmost', 'true')
+        window.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        window.title("Rotate Settings")
+        rotation_label = ttk.Label(window, text="Rotate (degrees):")
+        rotation_label.grid(row=0, column=0)
+        self.rotation_entry = ttk.Entry(window, width=10)
+        self.rotation_entry.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(window, text="Rotate", command=self.rotate_custom).grid(row=0, column=2, padx=5, pady=5)
+        # Close button
+        close_button = tk.Button(window, text="Close", command=lambda: window.destroy())
+        close_button.grid(row=10, column=2, sticky=tk.SE, padx=5, pady=5)
 
     def show_brightness_settings(self):
-        brightness_win = Toplevel(self.master)
-        brightness_win.title("Brightness Settings")
-        brightness_win.attributes('-topmost', 'true')
-        self.brightness_label = ttk.Label(brightness_win, text="Brightness:")
-        self.brightness_label.pack(side=tk.LEFT, padx=8, pady=8)
-        self.brightness_slider = ttk.Scale(brightness_win, from_=-100, to=400, orient=tk.HORIZONTAL, command=self.update_brightness)
-        self.brightness_slider.pack(side=tk.LEFT, padx=4, pady=8)
-        self.brightness_slider.set(0)
+        brightness_win = None
+        window = brightness_win
+        window = Toplevel(self.master)
+        window.attributes('-topmost', 'true')
+        window.protocol("WM_DELETE_WINDOW", self.disable_event)
+        
+        window.title("Brightness Settings")
+        brightness_label = ttk.Label(window, text="Brightness:")
+        brightness_label.grid(row=0, column=0)
+        brightness_slider = ttk.Scale(window, from_=-100, to=400, orient=tk.HORIZONTAL, command=self.update_brightness)
+        brightness_slider.grid(row=0, column=1, padx=5, pady=5)
+        brightness_slider.set(0)
+        # Close button
+        close_button = tk.Button(window, text="Close", command=lambda: window.destroy())
+        close_button.grid(row=10, column=1, sticky=tk.SE, padx=5, pady=5)
 
     def show_mask_settings(self):
-        mask_settings_win = Toplevel(self.master)
-        mask_settings_win.title("Mask Settings")
-        mask_settings_win.attributes('-topmost', 'true')
-        # mask_settings_win.geometry("600x800")
+        mask_settings_win = None
+        window = mask_settings_win
+        window = Toplevel(self.master)
+        window.attributes('-topmost', 'true')
+        window.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        window.title("Mask Settings")
 
         # Configure grid layout
-        mask_settings_win.columnconfigure(0, weight=1)
-        mask_settings_win.columnconfigure(1, weight=1)
+        window.columnconfigure(0, weight=1)
+        window.columnconfigure(1, weight=1)
 
         def save_settings():
             self.image_processor.cell_config.threshold_method = ThresholdMethod(threshold_var.get())
             self.image_processor.save_config()
-            mask_settings_win.destroy()
+            window.destroy()
 
         def load_settings():
             self.image_processor.load_config()
-            mask_settings_win.destroy()  # Reopen to refresh values
+            window.destroy()  # Reopen to refresh values
             self.show_mask_settings()
 
         # Control buttons at the top
-        control_frame = ttk.Frame(mask_settings_win)
+        control_frame = ttk.Frame(window)
         control_frame.grid(row=0, column=0, columnspan=2, sticky='ew', padx=5, pady=5)
         ttk.Button(control_frame, text="Save", command=save_settings).grid(row=0, column=0, padx=5)
         ttk.Button(control_frame, text="Load", command=load_settings).grid(row=0, column=1, padx=5)
 
         # Cell Detection Settings in left column
-        cell_detect_frame = ttk.LabelFrame(mask_settings_win, text="Cell Detection Settings")
+        cell_detect_frame = ttk.LabelFrame(window, text="Cell Detection Settings")
         cell_detect_frame.grid(row=1, column=0, sticky='nsew', padx=5, pady=5)
         cell_detect_frame.columnconfigure(1, weight=1)
 
@@ -870,7 +786,7 @@ class PDFViewer:
             row += 1
 
         # Preprocessing Settings in right column
-        preprocess_frame = ttk.LabelFrame(mask_settings_win, text="Preprocessing Settings")
+        preprocess_frame = ttk.LabelFrame(window, text="Preprocessing Settings")
         preprocess_frame.grid(row=1, column=1, sticky='nsew', padx=5, pady=5)
         preprocess_frame.columnconfigure(1, weight=1)
 
@@ -888,6 +804,10 @@ class PDFViewer:
             entry.bind("<Return>", setter)
             
             row += 1
+
+        # Close button
+        close_button = tk.Button(window, text="Close", command=lambda: window.destroy())
+        close_button.grid(row=10, column=1, sticky=tk.SE, padx=5, pady=5)
 
     def start_add_cells(self):
         """Begin drawing to add cells to the mask"""
