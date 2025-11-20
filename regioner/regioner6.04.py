@@ -131,16 +131,17 @@ class ImageProcessor:
                 selem = disk(15)  # Using a smaller fixed radius for efficiency
                 img = white_tophat(img, selem)
                 logger.debug("White tophat transform completed successfully")
-            elif self.preprocess_config.background_method == "none":
-                logger.debug("Skipping background correction")
-                pass  # No background correction
-            else:
-                logger.debug("Using default background subtraction")
+            elif self.preprocess_config.background_method == "gaussian":
+                logger.debug("Using gaussian background subtraction")
                 # Simple background estimation using gaussian blur
                 from scipy.ndimage import gaussian_filter
                 background = gaussian_filter(img, sigma=50)
                 img = img - background
                 img = np.clip(img, 0, 1)  # Normalize to [0,1] range
+            else:
+                logger.error("No valid background correction method, use either 'tophat' or 'gaussian'")
+                logger.debug("Skipping background correction")
+                pass  # No background correction
         except Exception as e:
             logger.error(f"Error in background correction: {str(e)}")
             # Fall back to no background correction
@@ -161,6 +162,9 @@ class ImageProcessor:
                 sigma_color=self.preprocess_config.bilateral_sigma_color,
                 sigma_spatial=self.preprocess_config.bilateral_sigma_space
             )
+        else:
+            logger.error("No valid noise reduction, use either 'median', 'gaussian', or 'bilateral'")
+            pass
 
         # Contrast enhancement
         if self.preprocess_config.contrast_method == "stretch":
@@ -176,6 +180,9 @@ class ImageProcessor:
         elif self.preprocess_config.contrast_method == "gamma":
             logger.debug("Applying gamma correction")
             img = exposure.adjust_gamma(img, self.preprocess_config.gamma)
+        else:
+            logger.error("No valid contrast enhancement, use either 'stretch', 'clahe', or 'gamma'")
+            pass
 
         # Signal enhancement
         if self.preprocess_config.enhance_method == "unsharp_mask":
@@ -185,6 +192,9 @@ class ImageProcessor:
                 radius=self.preprocess_config.unsharp_radius,
                 amount=self.preprocess_config.unsharp_amount
             )
+        else:
+            logger.error("No valid signal enhancement, use 'unsharp_mask'")
+            pass
 
         return img
 
@@ -430,7 +440,7 @@ class PDFViewer:
         # Add highlight regions button to manually enable this
 
         # This works as a labeling scheme, but how do I have it update?
-        # self.menu.add_command(label="Pen: "+str(self.choose_size_button.get()))
+        # self.menu.add_command(label="Pen: "+str(self.brush_size.get()))
 
         # Frames
         self.top_frame = ttk.Frame(self.master)
@@ -901,7 +911,15 @@ class PDFViewer:
         self.output.bind("<Button-1>", self.edit_mask_draw)
         self.output.bind("<B1-Motion>", self.edit_mask_draw)
         self.output.bind("<ButtonRelease-1>", self.show_cell_mask_threshold)
-        
+        # Right click erases
+        self.output.bind("<Button-2>", lambda event : self.edit_mask_draw(event, eraser=True))
+        self.output.bind("<B2-Motion>", lambda event : self.edit_mask_draw(event, eraser=True))
+        self.output.bind("<ButtonRelease-2>", self.show_cell_mask_threshold)
+        # Increases compatibility for more OSs
+        self.output.bind("<Button-3>", lambda event : self.edit_mask_draw(event, eraser=True))
+        self.output.bind("<B3-Motion>", lambda event : self.edit_mask_draw(event, eraser=True))
+        self.output.bind("<ButtonRelease-3>", self.show_cell_mask_threshold)
+
         # Initialize the correct mask depending on edit mode
         base_size = self.original_background.size
 
@@ -917,7 +935,7 @@ class PDFViewer:
 
 
 
-    def edit_mask_draw(self, event):
+    def edit_mask_draw(self, event, eraser=False):
         """Draw directly on the binary mask"""
         if not self.editing_mask or self.current_mask is None:
             return
@@ -927,7 +945,10 @@ class PDFViewer:
         r = int(self.brush_size.get())
 
         draw = ImageDraw.Draw(self.current_mask)
-        color = 255
+        if eraser == False:
+            color = 255
+        else:
+            color = 0
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
 
         # --- Visualization fix ---
