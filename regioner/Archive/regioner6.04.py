@@ -724,7 +724,6 @@ class PDFViewer:
         def save_settings():
             self.image_processor.cell_config.threshold_method = ThresholdMethod(threshold_var.get())
             self.image_processor.save_config()
-            window.destroy()
 
         def load_settings():
             self.image_processor.load_config()
