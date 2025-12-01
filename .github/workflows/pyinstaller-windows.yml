@@ -6,6 +6,10 @@ name: Build EXE (Upload)
 
 on:
   workflow_dispatch:
+    inputs:
+        message:
+            description: Filename (regionerX.XX.py)
+            required: true
 
 jobs:
   build:

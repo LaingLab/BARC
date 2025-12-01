@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
         message:
-            description: Filename
+            description: Filename (regionerX.XX.py)
             required: true
 
 jobs:
