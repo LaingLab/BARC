@@ -57,10 +57,10 @@ jobs:
           Get-ChildItem -Path dist -Recurse
         shell: powershell
 
-      - name: Upload EXE artifact
+      - name: Upload zipped artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RegionalCounter-exe
+          name: RegionalCounter
           path: dist/RegionalCounter.exe
           retention-days: 1
 
