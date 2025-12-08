@@ -890,8 +890,15 @@ class PDFViewer:
         if not self.editing_mask:
             return
         self.editing_mask = False
+        self.output.unbind("<Button-1>")
         self.output.unbind("<B1-Motion>")
         self.output.unbind("<ButtonRelease-1>")
+        self.output.unbind("<Button-2>")
+        self.output.unbind("<B2-Motion>")
+        self.output.unbind("<ButtonRelease-2>")
+        self.output.unbind("<Button-3>")
+        self.output.unbind("<B3-Motion>")
+        self.output.unbind("<ButtonRelease-3>")
         self.output.bind("<Button-1>", self.highlight_region)
         logger.info("Stopped mask edit mode")
         messagebox.showinfo("Mask Editing", "Mask edits applied. You can now re-count cells.")
@@ -1452,6 +1459,11 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         self.show_page(mask=mask_img)
 
+    
+    def next_image_experimental(self): # unused
+        self.root.destroy()
+        PDFViewer()
+
     def next_image(self):
         logger.info("Processing next image")
         if self.tiff_filename is None:
@@ -1467,12 +1479,16 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         if self.last_df is not None:
             self.last_df.to_excel(excel_path, index=False)
 
+        # This is SO UGLY, see if there is a cleaner way to re-init tkinter without breaking everything
+        # Could I do .destroy() and then call the program again?
         clear_preprocess_cache()
+        self.preprocess_image = None
         self.background_image = None
         self.original_background = None
         self.img = None
         self.atlas_filetype = None
         self.doc = None
+        self.current_page = None
         self.page_images = {}
         self.mask_images = {}
         self.zone_counters = {}
@@ -1483,7 +1499,34 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         self.manual_add_mask = None
         self.manual_remove_mask = None
+        self.editing_mask = False
+        self.mask_edit_add = True  # True = add cells, False = remove cells
+        self.mask_photo = False
+        self.mask_photo_id = False
+        self.current_mask = None   # reference to the current mask being edited
+        self.auto_mask = False 
 
+        # Manual edit masks
+        self.manual_add_mask = None
+        self.manual_remove_mask = None
+
+        # Background (TIFF) image
+        self.background_image = None
+        self.original_background = None
+        self.bg_photo_id = None
+        self.atlas_filetype = None
+
+        # TIFF filename
+        self.tiff_filename = None
+
+        # Last DF for counts
+        self.last_df = None
+
+        # Brightness
+        self.brightness = 0.0
+
+        # Mouse state tracking
+        self.current_state = None
 
         self.show_page()
         messagebox.showinfo("Next Image", f"Autosaved image to {image_path}\nAutosaved counts to {excel_path}" if self.last_df is not None else f"Autosaved image to {image_path}")
