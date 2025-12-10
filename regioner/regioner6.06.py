@@ -1609,18 +1609,15 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             logger.error(f"Error getting pixel value: {e}")
             return
 
-        try: 
-            name = simpledialog.askstring("Region Name", "Enter a name for this region:")
-        except Exception as e:
-            print('no highlighting', file=sys.stderr)
+        name = simpledialog.askstring("Region Name", "Enter a name for this region:")
+        if name == None:
+            return
 
-
-
-
-        name = name.strip() if name else f"Zone {zone_id}"
-        self.zone_names[self.current_page][zone_id] = name
         self.zone_counters[self.current_page] += 1
         zone_id = self.zone_counters[self.current_page]
+
+        name = name.strip() 
+        self.zone_names[self.current_page][zone_id] = name
 
         barrier_copy = barrier_img.copy()
         ImageDraw.floodfill(barrier_copy, (x, y), zone_id, thresh=0)
