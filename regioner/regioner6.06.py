@@ -274,11 +274,56 @@ class ImageProcessor:
 
         return img, labels
 
+# This is old so we should drop it to prevent obscurity
 def binary_mask_cell_count(background_pil):
     """Enhanced cell detection using ImageProcessor class"""
     processor = ImageProcessor()
     img, labels = processor.detect_cells(background_pil)
     return img, labels > 0
+    
+
+def split_stacked_tif(file_path):
+# Inputs a stacked tiff file and produces a subfolder in the same directory with 
+# the unstacked tiffs
+
+    if os.path.isfile(file_path) == False:
+        logger.warning('File does not exist, Exiting')
+        return
+
+    abs_path = os.path.abspath(file_path)
+    img = Image.open(abs_path)
+    num_of_tiffs = img.n_frames
+
+    if num_of_tiffs < 1:
+        logger.warning('No Tiff Found, Exiting')
+        return
+    if num_of_tiffs < 2:
+        logger.warning('Tiff Not Stacked // No Stacked Tiff Found, Exiting')
+        return
+    # absolute path without file extention (.tif)
+    full_file_name, ext = os.path.splitext(abs_path) 
+    # file name without extention
+    file_name = os.path.basename(full_file_name)
+    # absolute path of save directory
+    save_dir = full_file_name + '_split_imgs'
+
+    if os.path.isdir(save_dir):
+        logger.error('Save directory already exists, Exiting')
+        return
+
+    os.mkdir(save_dir)
+
+    for i in range (num_of_tiffs):
+        try:
+            img.seek(i)
+            save_name = file_name + f'_ch{i}.tif'
+            full_save_name = os.path.join(save_dir, save_name)
+            img.save(full_save_name)
+        except EOFError: #end of file error
+            logger.debug('Number of splits caused an error, Exiting')
+            return
+
+
 
 class PDFViewer:
     def __init__(self):
@@ -401,6 +446,7 @@ class PDFViewer:
         # Create File menu dropdown 
         filemenu = tk.Menu(self.menu)
         self.menu.add_cascade(label="File", menu=filemenu)
+        filemenu.add_command(label="Split Tiff", command=self.split_tiff)
         filemenu.add_command(label="Import Tiff", command=self.import_tiff)
         filemenu.add_command(label="Import Atlas Section", command=self.open_file)
         filemenu.add_command(label="Import Paint", command=self.open_paint)
@@ -476,6 +522,12 @@ class PDFViewer:
         self.scrollx.configure(command=self.output.xview)
 
     # End of UI, beginning of functions
+
+    def split_tiff(self):
+        path = fd.askopenfilename(filetypes=[("TIFF files", "*.tif *.tiff")])
+        if path:
+            split_stacked_tif(path)
+
     def start_paint(self):
         if self.current_state == 'paint':
             return
