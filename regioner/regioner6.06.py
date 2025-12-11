@@ -282,7 +282,7 @@ def binary_mask_cell_count(background_pil):
     return img, labels > 0
     
 
-def split_stacked_tif(file_path):
+def split_stacked_tiff(file_path):
 # Inputs a stacked tiff file and produces a subfolder in the same directory with 
 # the unstacked tiffs
 
@@ -300,7 +300,7 @@ def split_stacked_tif(file_path):
     if num_of_tiffs < 2:
         logger.warning('Tiff Not Stacked // No Stacked Tiff Found, Exiting')
         return
-    # absolute path without file extention (.tif)
+    # absolute path without file extention (.tiff)
     full_file_name, ext = os.path.splitext(abs_path) 
     # file name without extention
     file_name = os.path.basename(full_file_name)
@@ -316,7 +316,7 @@ def split_stacked_tif(file_path):
     for i in range (num_of_tiffs):
         try:
             img.seek(i)
-            save_name = file_name + f'_ch{i}.tif'
+            save_name = file_name + f'_ch{i}.tiff'
             full_save_name = os.path.join(save_dir, save_name)
             img.save(full_save_name)
         except EOFError: #end of file error
@@ -526,7 +526,7 @@ class PDFViewer:
     def split_tiff(self):
         path = fd.askopenfilename(filetypes=[("TIFF files", "*.tif *.tiff")])
         if path:
-            split_stacked_tif(path)
+            split_stacked_tiff(path)
 
     def start_paint(self):
         if self.current_state == 'paint':
@@ -1396,6 +1396,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         tiff_path = fd.askopenfilename(filetypes=[("TIFF files", "*.tiff *.tif")])
         if tiff_path:
             logger.info(f"Opening TIFF file: {tiff_path}")
+            self.tiff_dir = os.path.dirname(tiff_path)
             self.tiff_filename = os.path.splitext(os.path.basename(tiff_path))[0]
             bg = Image.open(tiff_path)
             array = np.array(bg)
@@ -1811,8 +1812,8 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             messagebox.showerror("Error", "No TIFF loaded.")
             return
 
-        image_path = f"{self.tiff_filename}_counted.jpg"
-        csv_path = f"{self.tiff_filename}_data.csv"
+        image_path = os.path.join(self.tiff_dir, f"{self.tiff_filename}_counted.jpg")
+        csv_path = os.path.join(self.tiff_dir, f"{self.tiff_filename}_data.csv")
 
         self.autosave_flattened_image(image_path)
 
@@ -1858,6 +1859,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         # TIFF filename
         self.tiff_filename = None
+        self.tiff_dir = None
 
         # Last DF for counts
         self.last_df = None
