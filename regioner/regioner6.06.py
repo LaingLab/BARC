@@ -679,20 +679,17 @@ class PDFViewer:
     def erase(self, event):
         if len(self.output.find_withtag('paint')) == 0:
             return
-        # Checks if any paint is within brush range
         x = event.x
         y = event.y
-        line_tuple = self.output.find_closest(x, y)
-        x0, y0, x1, y1 = self.output.coords(line_tuple[0])
-        distance = self.distance_to_line(x, y, x0, y0, x1, y1)
         brush = self.brush_size.get()
-        eraser_brush = brush * 1.5
-        if distance >= eraser_brush:
-            return
-        # Removes all paint within eraser_brush range
-        for item in self.output.find_overlapping(x-eraser_brush, y-eraser_brush, x+eraser_brush, y+eraser_brush):
-            objectToBeDeleted = item
-            self.output.delete(objectToBeDeleted)
+        # find all paint within brush size of mouse
+        for item in self.output.find_overlapping(x-brush, y-brush, x+brush, y+brush):
+            # evaluate all tags the item has
+            for tag in self.output.gettags(item):
+                if tag != 'paint':
+                    continue # use continue to ensure all tags are checked, paint doesnt need to be the first
+                objectToBeDeleted = item
+                self.output.delete(objectToBeDeleted)
 
     def reset_toggle(self, event):
         if self.draw_type == 'drag':
@@ -708,21 +705,6 @@ class PDFViewer:
 
     def reset(self, event):
         self.old_x, self.old_y = None, None
-
-    def distance_to_line(self, px, py, x0, y0, x1, y1):
-        # Robust point-to-segment distance.
-        # If the segment is a point, return Euclidean distance to that point.
-        dx = x1 - x0
-        dy = y1 - y0
-        if dx == 0 and dy == 0:
-            return math.hypot(px - x0, py - y0)
-
-        # Project point onto the line defined by the segment, then clamp to [0,1]
-        t = ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy)
-        t = max(0.0, min(1.0, t))
-        proj_x = x0 + t * dx
-        proj_y = y0 + t * dy
-        return math.hypot(px - proj_x, py - proj_y)
 
     def show_brush_settings(self): # This is the layout to be applied to all other spawned windows
         brush_win = None
@@ -1343,7 +1325,9 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             self.background_photo = ImageTk.PhotoImage(display_bg)
             self.bg_photo_id = self.output.create_image(0, 0, 
                                                        image=self.background_photo, 
-                                                       anchor='nw')
+                                                       anchor='nw', 
+                                                       tag='image')
+
             
             # If mask exists, display it on the left
             # Display untouched image on the right for comparison
@@ -1352,15 +1336,18 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
                 offset_x = display_bg.width + 10  # 10 pixels spacing
                 self.bg_mask_photo_id = self.output.create_image(offset_x, 0, 
                                                                 image=self.background_photo, 
-                                                                anchor='nw')
+                                                                anchor='nw', 
+                                                                tag='image')
                 self.mask_photo_id = self.output.create_image(0, 0, 
                                                              image=self.mask_photo, 
-                                                             anchor='nw')
+                                                             anchor='nw', 
+                                                             tag='mask')
                 
         # Display atlas overlay
         self.output.create_image(self.img_x, self.img_y, 
                                image=self.photo, 
-                               anchor='nw')
+                               anchor='nw', 
+                               tag='atlas')
         
         # Update scroll region to include both images
         self.output.config(scrollregion=self.output.bbox(tk.ALL))
