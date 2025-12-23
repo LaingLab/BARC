@@ -1,4 +1,4 @@
-# Regional IF Analyzer
+# BARC: Brain Atlas Regional Counter
 
 A GUI tool for analyzing immunofluorescence images with atlas region mapping and automated cell counting.
 
