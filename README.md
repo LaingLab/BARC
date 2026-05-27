@@ -4,10 +4,14 @@ A GUI tool for analyzing immunofluorescence images with atlas region mapping and
 
 **v8.01.000 Highlights**
 - New modern Blob Detection engine (Laplacian of Gaussian) — significantly better results on most immunofluorescence images.
-- "Smart Suggest (Offline)" — a fully local, privacy-preserving tool that analyzes your image and recommends better detection parameters.
-- Live switching between Blob and legacy Watershed detection methods.
-- Improved Autotune buttons that adapt to the selected detection strategy.
-- Brush size dialog now opens automatically when using Add/Remove Cell tools.
+- "Smart Suggest (Offline)" — a fully local, privacy-preserving tool that analyzes your image and recommends better detection parameters (with checkbox selection).
+- Live switching between Blob and legacy Watershed detection methods directly in Mask Settings.
+- Left-side File Browser pane: Select a folder to see all TIFFs, double-click to load, and see which images have already been counted (✓ indicator).
+- Automatic export on Count Cells: `{image}.xlsx` (with Cell Counts + full Detection Parameters metadata sheet) and `{image}_masked.tif` (original + red mask overlay).
+- Export/Import full detection settings as portable .json files from Mask Settings.
+- Improved Autotune buttons that adapt intelligently based on the active detection method.
+- Brush Settings dialog now opens automatically when using Add/Remove Cell.
+- Many bug fixes around painted regions, transparency mode, and Progress dialogs.
 
 ## Description
 
@@ -15,7 +19,7 @@ The Regional IF Analyzer is designed to help researchers analyze immunofluoresce
 - Overlaying atlas sections onto TIFF images
 - Highlighting and naming specific regions of interest
 - Detecting and counting cells within defined regions
-- Exporting results to Excel files
+- Automatic Excel + masked image export on Count Cells (with full parameter metadata)
 - Saving annotated images
 
 ## Installation
@@ -43,6 +47,21 @@ cd BARCC
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note on Excel exports** (recommended):
+Starting with v8.01, clicking **Count Cells** automatically saves:
+- `YourImage.xlsx` — Contains two sheets:
+  - "Cell Counts" (per region)
+  - "Detection Parameters" (complete record of every setting used — excellent for methods/reproducibility)
+- `YourImage_masked.tif` — Original image with the final cell mask (including manual edits) as a semi-transparent red overlay.
+
+For full `.xlsx` support, install the Excel engines:
+
+```bash
+pip install openpyxl xlsxwriter
+```
+
+Without them, BARCC falls back to a plain `.csv`.
 
 ## Running the Program
 

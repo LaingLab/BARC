@@ -38,6 +38,7 @@ import logging
 import yaml
 import sys
 import json
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -502,6 +503,11 @@ class PDFViewer:
 
         # TIFF filename
         self.tiff_filename = None
+        self.tiff_dir = None
+
+        # File browser
+        self.current_tiff_directory = None
+        self.tiff_file_list = []   # list of full paths
 
         # Last DF for counts
         self.last_df = None
@@ -633,13 +639,25 @@ class PDFViewer:
         # This works as a labeling scheme, but how do I have it update?
         # self.menu.add_command(label="Pen: "+str(self.draw_type.get()))
 
-        # Frames
-        self.top_frame = ttk.Frame(self.master)
-        self.top_frame.grid(row=0, column=0, sticky='nsew')
+        # Main layout: Horizontal PanedWindow (File Browser | Image Viewer)
+        self.main_paned = ttk.PanedWindow(self.master, orient=tk.HORIZONTAL)
+        self.main_paned.grid(row=0, column=0, sticky='nsew')
+        self.master.rowconfigure(0, weight=1)
+        self.master.columnconfigure(0, weight=1)
+
+        # --- Left File Browser Pane ---
+        self.file_browser_frame = ttk.Frame(self.main_paned, width=240)
+        self._build_file_browser(self.file_browser_frame)
+        self.main_paned.add(self.file_browser_frame, weight=0)
+
+        # --- Right Content Area (existing viewer) ---
+        self.top_frame = ttk.Frame(self.main_paned)
+        self.main_paned.add(self.top_frame, weight=1)
+
         self.top_frame.rowconfigure(0, weight=1)
         self.top_frame.columnconfigure(0, weight=1)
 
-        # Scrollbars and canvas
+        # Scrollbars and canvas (moved inside top_frame)
         self.scrolly = ttk.Scrollbar(self.top_frame, orient=tk.VERTICAL)
         self.scrolly.grid(row=0, column=1, sticky='ns')
         self.scrollx = ttk.Scrollbar(self.top_frame, orient=tk.HORIZONTAL)
@@ -1635,6 +1653,16 @@ class PDFViewer:
 
         refresh_preset_list()
 
+        # Export / Import config files (portable settings)
+        export_import_frame = ttk.Frame(control_frame)
+        export_import_frame.grid(row=3, column=0, columnspan=4, pady=(6, 2), sticky='w')
+
+        ttk.Label(export_import_frame, text="Config Files:").grid(row=0, column=0, padx=(5, 8))
+        ttk.Button(export_import_frame, text="Export...", width=10,
+                   command=self.export_detection_settings).grid(row=0, column=1, padx=2)
+        ttk.Button(export_import_frame, text="Import...", width=10,
+                   command=lambda: [self.import_detection_settings(), window.destroy()]).grid(row=0, column=2, padx=2)
+
         # Create frame for radiobuttons and their options
         radio_frame = ttk.Frame(window)
         radio_frame.grid(row=1, column=0, sticky='nwes', padx=5, pady=5)
@@ -2108,6 +2136,75 @@ class PDFViewer:
         os.makedirs(presets_dir, exist_ok=True)
         return os.path.join(presets_dir, "presets.json")
 
+    # ------------------------------------------------------------------
+    # Export / Import Detection Settings (Portable Config Files)
+    # ------------------------------------------------------------------
+
+    def export_detection_settings(self):
+        """Export current cell detection + preprocessing settings to a user-chosen JSON file."""
+        try:
+            default_name = f"barcc_settings_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+
+            file_path = fd.asksaveasfilename(
+                title="Export Detection Settings",
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                initialfile=default_name
+            )
+
+            if not file_path:
+                return
+
+            config_data = {
+                "version": "8.01.000",
+                "detection_method": self.image_processor.cell_config.detection_method,
+                "cell_detection": self.image_processor.cell_config.__dict__.copy(),
+                "preprocessing": self.image_processor.preprocess_config.__dict__.copy(),
+            }
+
+            with open(file_path, "w") as f:
+                json.dump(config_data, f, indent=2)
+
+            messagebox.showinfo("Export Successful", f"Settings exported to:\n{file_path}")
+
+        except Exception as e:
+            messagebox.showerror("Export Failed", f"Could not export settings:\n{e}")
+
+    def import_detection_settings(self):
+        """Load cell detection + preprocessing settings from a user-chosen JSON file."""
+        try:
+            file_path = fd.askopenfilename(
+                title="Import Detection Settings",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+
+            if not file_path:
+                return
+
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            # Apply detection method if present
+            if "detection_method" in data:
+                self.image_processor.cell_config.detection_method = data["detection_method"]
+
+            # Apply cell detection config
+            for key, value in data.get("cell_detection", {}).items():
+                if hasattr(self.image_processor.cell_config, key):
+                    setattr(self.image_processor.cell_config, key, value)
+
+            # Apply preprocessing config
+            for key, value in data.get("preprocessing", {}).items():
+                if hasattr(self.image_processor.preprocess_config, key):
+                    setattr(self.image_processor.preprocess_config, key, value)
+
+            messagebox.showinfo("Import Successful", "Settings imported successfully.\n\nThe Mask Settings dialog will now close so the new values can be applied.")
+            # Close the current Mask Settings window so the user sees the effect when they reopen it
+            # We use a small delay + destroy pattern inside the dialog context later
+
+        except Exception as e:
+            messagebox.showerror("Import Failed", f"Could not load settings file:\n{e}")
+
     def load_presets(self):
         path = self._get_presets_path()
         if os.path.exists(path):
@@ -2489,6 +2586,14 @@ class PDFViewer:
         self.view_scale = 1.0
         self.img_x = 0
         self.img_y = 0
+
+        # Reset zone/mask state for pure TIFF workflows so painted regions work cleanly
+        if self.current_page is None:
+            self.current_page = 0
+        self.mask_images.pop(self.current_page, None)
+        self.zone_names.pop(self.current_page, None)
+        self.zone_counters.pop(self.current_page, None)
+
         tiff_path = fd.askopenfilename(filetypes=[("TIFF files", "*.tiff *.tif")])
         if tiff_path:
             logger.info(f"Opening TIFF file: {tiff_path}")
@@ -2517,6 +2622,191 @@ class PDFViewer:
             self.paint_layer = Image.new('RGBA', self.original_background.size, (0, 0, 0, 0))
 
             self.show_page()
+
+    # ------------------------------------------------------------------
+    # File Browser (Left Pane) - Directory TIFF selector
+    # ------------------------------------------------------------------
+
+    def select_tiff_directory(self):
+        """Let user choose a folder containing TIFF files."""
+        directory = fd.askdirectory(title="Select folder containing TIFF images")
+        if directory:
+            self.current_tiff_directory = directory
+            self.folder_label.config(text=directory)
+            self.refresh_tiff_file_list()
+            # Force wraplength update after the text is set
+            self.file_browser_frame.after(50, self._update_folder_label_wraplength)
+
+    def refresh_tiff_file_list(self):
+        """Scan the current directory for .tif / .tiff files and update the Treeview with counted status."""
+        if not self.current_tiff_directory or not os.path.isdir(self.current_tiff_directory):
+            return
+
+        self.tiff_file_list = []
+        self._tree_iid_to_path = {}
+
+        try:
+            files = os.listdir(self.current_tiff_directory)
+            tiff_files = [f for f in files if f.lower().endswith(('.tif', '.tiff'))]
+            tiff_files.sort()
+
+            self.tiff_file_list = [os.path.join(self.current_tiff_directory, f) for f in tiff_files]
+
+            # Clear and repopulate Treeview
+            if hasattr(self, 'tiff_tree'):
+                for item in self.tiff_tree.get_children():
+                    self.tiff_tree.delete(item)
+
+                for full_path in self.tiff_file_list:
+                    filename = os.path.basename(full_path)
+                    has_csv = self._has_matching_csv(full_path)
+                    status = "✓" if has_csv else ""
+
+                    iid = self.tiff_tree.insert("", "end", values=(filename, status))
+                    self._tree_iid_to_path[iid] = full_path
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read directory:\n{e}")
+
+    def _update_folder_label_wraplength(self, event=None):
+        """Dynamically set wraplength based on the current width of the file browser pane."""
+        if hasattr(self, 'folder_label') and self.folder_label.winfo_exists():
+            width = self.folder_label.winfo_width()
+            if width > 50:
+                new_wrap = max(60, width - 8)
+                self.folder_label.configure(wraplength=new_wrap)
+
+    def _has_matching_csv(self, tiff_path):
+        """Check if a results file (CSV or XLSX) matching this TIFF exists in the same directory."""
+        if not tiff_path or not os.path.exists(tiff_path):
+            return False
+
+        directory = os.path.dirname(tiff_path)
+        base_name = os.path.splitext(os.path.basename(tiff_path))[0]
+
+        # Check for common output files generated by Count Cells
+        candidates = [
+            f"{base_name}.csv",
+            f"{base_name}.xlsx",
+            f"{base_name}_counted.csv",
+            f"{base_name}_counted.xlsx",
+            f"{base_name} - counted.csv",
+            f"{base_name}_cells.csv",
+        ]
+
+        for candidate in candidates:
+            file_path = os.path.join(directory, candidate)
+            if os.path.exists(file_path):
+                return True
+
+        return False
+
+    def load_tiff_from_list(self, event=None):
+        """Load the TIFF file that was double-clicked in the file browser Treeview."""
+        if not hasattr(self, 'tiff_tree'):
+            return
+
+        selection = self.tiff_tree.selection()
+        if not selection:
+            return
+
+        iid = selection[0]
+        if iid in self._tree_iid_to_path:
+            full_path = self._tree_iid_to_path[iid]
+            self._load_tiff_file(full_path)
+
+    def _build_file_browser(self, parent):
+        """Builds the left-side file manager pane with counted status."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        # Header
+        header = ttk.Frame(parent)
+        header.grid(row=0, column=0, sticky='ew', padx=4, pady=(4, 2))
+
+        ttk.Button(header, text="Select Folder", command=self.select_tiff_directory).pack(fill='x')
+
+        self.folder_label = ttk.Label(header, text="No folder selected", anchor='w', justify=tk.LEFT)
+        self.folder_label.pack(fill='x', pady=(4, 0))
+
+        # Dynamically adjust wraplength when the pane is resized
+        header.bind("<Configure>", self._update_folder_label_wraplength)
+
+        # Initial wraplength update after layout settles
+        parent.after(150, self._update_folder_label_wraplength)
+
+        # File list using Treeview for multiple columns (Filename + Counted status)
+        columns = ("image", "counted")
+        self.tiff_tree = ttk.Treeview(parent, columns=columns, show="tree", selectmode="browse")
+        self.tiff_tree.column("#0", width=0, stretch=False)  # Hide the tree column
+        self.tiff_tree.column("image", width=160, anchor="w")
+        self.tiff_tree.column("counted", width=40, anchor="center")
+
+        self.tiff_tree.heading("image", text="Image")
+        self.tiff_tree.heading("counted", text="✓")
+
+        self.tiff_tree.grid(row=2, column=0, sticky='nsew', padx=4, pady=4)
+        self.tiff_tree.bind("<Double-Button-1>", self.load_tiff_from_list)
+
+        # Store mapping from iid to full path
+        self._tree_iid_to_path = {}
+
+        # Refresh button
+        ttk.Button(parent, text="Refresh", command=self.refresh_tiff_file_list).grid(row=3, column=0, sticky='ew', padx=4, pady=(0, 4))
+
+    def _load_tiff_file(self, tiff_path):
+        """Core TIFF loading logic (shared between manual import and file browser)."""
+        if not tiff_path or not os.path.exists(tiff_path):
+            messagebox.showerror("Error", "Selected file does not exist.")
+            return
+
+        logger.info(f"Loading TIFF from file browser: {tiff_path}")
+
+        # Reset zone/mask state for clean paint-based workflows
+        if self.current_page is None:
+            self.current_page = 0
+        self.mask_images.pop(self.current_page, None)
+        self.zone_names.pop(self.current_page, None)
+        self.zone_counters.pop(self.current_page, None)
+
+        # Reset state similar to import_tiff
+        self.named_paint_groups.clear()
+        self.current_paint_group = None
+        self.view_scale = 1.0
+        self.img_x = 0
+        self.img_y = 0
+
+        self.tiff_dir = os.path.dirname(tiff_path)
+        self.tiff_filename = os.path.splitext(os.path.basename(tiff_path))[0]
+
+        try:
+            bg = Image.open(tiff_path)
+            array = np.array(bg)
+
+            if array.ndim == 2 or (array.ndim == 3 and array.shape[2] == 1):
+                array = np.squeeze(array)
+                array_norm = (array - array.min()) / (array.max() - array.min() + 1e-8) * 255
+                bg_RGBA = Image.fromarray(array_norm.astype(np.uint8)).convert('RGBA')
+            elif array.max() <= 1.0:
+                array = (array * 255).astype(np.uint8)
+                bg_RGBA = Image.fromarray(array).convert('RGBA')
+            else:
+                bg_RGBA = bg.convert('RGBA')
+
+            ww, wh = self.output.winfo_width(), self.output.winfo_height()
+            bw, bh = bg_RGBA.size
+            scale = min(ww / bw, wh / bh) if ww > 1 and wh > 1 else 1.0
+            new_size = (int(bw * scale), int(bh * scale))
+            self.background_image = bg_RGBA.resize(new_size, Image.BILINEAR)
+            self.original_background = self.background_image.copy()
+
+            self.paint_layer = Image.new('RGBA', self.original_background.size, (0, 0, 0, 0))
+
+            self.show_page()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load TIFF:\n{e}")
+            logger.error(f"Failed to load TIFF {tiff_path}: {e}")
 
     def save_flattened_image(self, event=None):
         logger.info("Attempting to save flattened image")
@@ -2803,19 +3093,32 @@ class PDFViewer:
             self.stop_paint()
 
         # Robust fallback for painted regions:
-        # If there are still 'paint' items on the canvas (strokes the user drew),
-        # make sure they become zones with default names so the spreadsheet gets populated.
-        # This handles cases where naming didn't happen or the previous auto-logic missed them.
+        # Always convert any remaining paint strokes into zones when Count Cells is pressed.
+        # This ensures that zones drawn with the Paint tool are respected even if the user
+        # previously loaded an atlas or has mask_images entries for the current page.
         remaining_paint = self.output.find_withtag('paint')
-        if remaining_paint and self.current_page not in self.mask_images:
+        if remaining_paint:
             self._force_paint_strokes_to_zones(remaining_paint)
             # Clean up the visual paint strokes now that they've been turned into zones
             self.output.delete('paint')
 
         if self.current_page not in self.mask_images:
-            logger.warning("Cell counting failed: No regions selected in atlas")
-            messagebox.showerror("Error", "Please load and select regions in the atlas first.")
-            return
+            # One last attempt: if there are still paint items, force convert them
+            remaining = self.output.find_withtag('paint')
+            if remaining:
+                self._force_paint_strokes_to_zones(remaining)
+                self.output.delete('paint')
+
+            if self.current_page not in self.mask_images:
+                logger.warning("Cell counting failed: No regions defined")
+                messagebox.showerror(
+                    "No Regions Defined",
+                    "No regions (zones) have been defined for this page.\n\n"
+                    "Please either:\n"
+                    "• Load an atlas and click on regions to define them, or\n"
+                    "• Use the Paint tools to draw regions (right-click strokes to name them, or let Count Cells auto-name them)."
+                )
+                return
 
         # Guard: if there are still no zones defined for this page after auto-stopping paint,
         # give a clear message instead of generating an empty spreadsheet.
@@ -2885,17 +3188,80 @@ class PDFViewer:
         progress.set_progress(85, "Generating annotated image...")
         self.show_page()
 
-        save_path = fd.asksaveasfilename(title="Save CSV", defaultextension=".csv", filetypes=[("Comma-separated values", "*.csv")])
-        if save_path:
-            # df.to_excel(save_path, index=False)
-            df.to_csv(save_path, index=False)
-            messagebox.showinfo("Cell Counts Saved", f"Cell counts per zone saved to: {save_path}")
-        else:
-            messagebox.showinfo("Cell Counts", f"Cell counts per zone: {dict(zip(df['Zone'], df['Cell_Count']))}")
+        # === Automatic saving of results (new in 8.01) ===
+        base_name = self.tiff_filename
+        tiff_dir = self.tiff_dir
+
+        # 1. Save Excel file with two sheets (Counts + Detection Parameters)
+        xlsx_path = os.path.join(tiff_dir, f"{base_name}.xlsx")
+        excel_saved = False
+
+        for engine in ['openpyxl', 'xlsxwriter']:
+            try:
+                with pd.ExcelWriter(xlsx_path, engine=engine) as writer:
+                    df.to_excel(writer, sheet_name="Cell Counts", index=False)
+
+                    # Metadata sheet with all detection parameters
+                    meta_data = []
+                    cfg = self.image_processor.cell_config
+                    pcfg = self.image_processor.preprocess_config
+
+                    for k, v in cfg.__dict__.items():
+                        meta_data.append({"Category": "Cell Detection", "Parameter": k, "Value": str(v)})
+
+                    for k, v in pcfg.__dict__.items():
+                        meta_data.append({"Category": "Preprocessing", "Parameter": k, "Value": str(v)})
+
+                    meta_df = pd.DataFrame(meta_data)
+                    meta_df.to_excel(writer, sheet_name="Detection Parameters", index=False)
+
+                messagebox.showinfo("Results Saved", f"Excel file saved:\n{xlsx_path}")
+                excel_saved = True
+                break
+            except Exception:
+                continue  # try next engine
+
+        if not excel_saved:
+            # Final fallback to CSV
+            csv_path = os.path.join(tiff_dir, f"{base_name}.csv")
+            df.to_csv(csv_path, index=False)
+            messagebox.showwarning(
+                "Excel Export Failed",
+                f"Could not save as Excel (openpyxl or xlsxwriter not installed).\n"
+                f"Fell back to CSV:\n{csv_path}\n\n"
+                f"To enable .xlsx output with metadata sheet, run:\n"
+                f"pip install openpyxl xlsxwriter"
+            )
+
+        # 2. Automatically save the mask as a flattened overlay on the original image
+        try:
+            orig = self.original_background.convert('RGBA')
+
+            # Resize final cell mask to full resolution
+            mask_full = final_cell_mask
+            mask_resized = Image.fromarray((mask_full * 255).astype(np.uint8)).resize(orig.size, Image.NEAREST)
+
+            # Create semi-transparent red overlay
+            overlay = Image.new('RGBA', orig.size, (0, 0, 0, 0))
+            red_layer = Image.new('RGBA', orig.size, (255, 0, 0, 110))
+            overlay.paste(red_layer, mask=mask_resized)
+
+            masked_img = Image.alpha_composite(orig, overlay)
+
+            masked_path = os.path.join(tiff_dir, f"{base_name}_masked.tif")
+            masked_img.save(masked_path, compression='tiff_deflate')
+
+            logger.info(f"Masked image saved: {masked_path}")
+        except Exception as e:
+            logger.error(f"Failed to save _masked.tif: {e}")
 
         if progress:
             progress.set_progress(100, "Done")
             progress.close()
+
+        # Refresh file browser so the "counted" indicator updates
+        if hasattr(self, 'tiff_tree') and self.current_tiff_directory:
+            self.master.after(300, self.refresh_tiff_file_list)
 
     def show_cell_mask_threshold(self, event=None, calculate=True):
         """Display the combined (auto + manual) mask overlay"""

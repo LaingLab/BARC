@@ -366,6 +366,23 @@ def build_manual():
     pdf.ln(3)
 
     pdf.set_font("Helvetica", "", 10.5)
+    pdf.body(
+        "For the best experience with automatic Excel exports (including a second sheet with all "
+        "detection parameters), we also recommend installing the Excel engines:"
+    )
+    pdf.set_font("Courier", "", 9)
+    pdf.multi_cell(0, 5, "pip install openpyxl xlsxwriter")
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.body(
+        "If these packages are missing, BARCC will automatically fall back to saving results as a "
+        "plain .csv file instead of .xlsx. These packages are listed as recommended (but not strictly required) "
+        "in the project's requirements.txt."
+    )
+    pdf.ln(3)
+
+    pdf.set_font("Helvetica", "", 10.5)
     pdf.body("3. Launch the application:")
     pdf.set_font("Courier", "", 9)
     pdf.multi_cell(0, 5, "cd Application\npython barcc.py")
@@ -396,23 +413,29 @@ def build_manual():
     pdf.chapter_title("4. User Interface Overview", 0)
 
     pdf.body(
-        "The interface is intentionally minimal to maximize screen real estate for image viewing. "
-        "All functionality is accessed through the top menu bar."
+        "The main interface consists of a left file browser pane and a large central image canvas. "
+        "The left pane lets you select a folder and browse all TIFF images within it. Double-clicking "
+        "any file loads it as the active image. A checkmark column shows which images have already "
+        "been counted (based on the presence of matching .csv or .xlsx result files)."
+    )
+
+    pdf.body(
+        "All other functionality is accessed through the top menu bar. The interface is designed "
+        "to keep as much screen space as possible available for the image and mask visualization."
     )
 
     pdf.chapter_title("Main Canvas", 1)
     pdf.body(
-        "The large central area displays your experimental image with the atlas overlay on top. "
-        "You can pan using the scrollbars. Use the mouse wheel to zoom in and out. Zoom is centered "
+        "The large central area displays your experimental image with the atlas overlay on top (when loaded). "
+        "You can pan using the scrollbars or Alt+drag. Use the mouse wheel to zoom in and out. Zoom is centered "
         "on the mouse cursor and keeps painted regions, atlas overlays, and masks perfectly aligned "
-        "with the background image at all zoom levels. When viewing cell masks (manual or automatic), "
-        "a split view may appear for comparison."
+        "with the background image at all zoom levels."
     )
 
     pdf.chapter_title("Menus", 1)
     pdf.body(
         "File, Edit, Atlas, Paint, Mask, and Cell menus provide access to all features. "
-        "Many operations also open small auxiliary windows for parameter adjustment."
+        "Many operations (especially in Mask Settings) open auxiliary dialogs for parameter adjustment."
     )
 
     # ------------------------------------------------------------------
@@ -436,6 +459,23 @@ def build_manual():
     pdf.body(
         "Utility for breaking apart stacked (multi-page) TIFF files into individual images. "
         "Useful when your source data contains multiple sections in one file."
+    )
+
+    pdf.chapter_title("File Browser (Left Pane)", 1)
+    pdf.body(
+        "A dedicated file manager pane is available on the left side of the main window. "
+        "Click \"Select Folder\" to choose a directory containing your experimental TIFF images. "
+        "All .tif and .tiff files in that folder are listed. Double-click any file to load it as the active image."
+    )
+
+    pdf.body(
+        "A second column shows a checkmark (✓) for any image that already has a corresponding results file "
+        "(.csv or .xlsx) in the same folder from a previous Count Cells operation. This makes it easy to see "
+        "which images in a large dataset have already been processed."
+    )
+
+    pdf.body(
+        "Use the Refresh button if you add or remove files from the folder while the program is running."
     )
 
     pdf.chapter_title("Save Flattened Image", 1)
@@ -809,19 +849,37 @@ def build_manual():
     )
 
     pdf.body(
-        "BARCC will compute the number of detected cells within each named region and present "
-        "a summary. You will be prompted to save the results as an Excel (.xlsx) file containing:"
+        "BARCC will compute the number of detected cells within each named region. "
+        "Results are now saved **automatically** (no file dialog) with the following files created in the same folder as your source TIFF:"
     )
 
     pdf.bullet_list([
-        "Region name",
-        "Cell count",
-        "Region area (pixels)",
-        "Cell density (if applicable)"
+        "`YourImage.xlsx` — Excel workbook with two sheets:",
+        "    • Cell Counts — Region name, cell count, area, density, etc.",
+        "    • Detection Parameters — Complete record of every setting used (both cell detection and preprocessing). This is extremely useful for reproducibility and methods sections.",
+        "`YourImage_masked.tif` — The original image with the final cell mask (including any manual Add/Remove edits) drawn as a semi-transparent red overlay. Ready for figures or further analysis."
     ])
 
     pdf.body(
-        "The Excel file is the primary deliverable for statistical analysis and figure preparation."
+        "BARCC automatically saves two files when you click Count Cells (no manual Save dialog):"
+    )
+
+    pdf.bullet_list([
+        "`YourImage.xlsx` — Contains two sheets: \"Cell Counts\" (the actual results) and \"Detection Parameters\" (a complete record of every setting used for reproducibility).",
+        "`YourImage_masked.tif` — The original image with the final cell mask (after all manual Add/Remove edits) drawn as a semi-transparent red overlay. This is very useful for figure preparation."
+    ])
+
+    pdf.body(
+        "To generate the .xlsx file (instead of falling back to .csv), the following packages are required:"
+    )
+
+    pdf.set_font("Courier", "", 9)
+    pdf.multi_cell(0, 5, "pip install openpyxl xlsxwriter")
+    pdf.set_font("Helvetica", "", 10.5)
+
+    pdf.body(
+        "These are listed as recommended (but not strictly required) in the project's requirements.txt. "
+        "Without them, results are saved as a plain CSV file."
     )
 
     # ------------------------------------------------------------------
@@ -832,7 +890,8 @@ def build_manual():
     pdf.bullet_list([
         "Flattened Image (JPEG) - Final figure-ready composite of image + atlas + annotations",
         "Paint files - Reusable region definitions",
-        "Excel results - Quantitative data for downstream analysis"
+        "Automatic Excel export on Count Cells (with full Detection Parameters metadata sheet)",
+        "Automatic _masked.tif export (original image + final cell mask overlay)"
     ])
 
     # ------------------------------------------------------------------
