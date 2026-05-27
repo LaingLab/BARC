@@ -1,4 +1,4 @@
-#    BARC (Brain Atlas Regional Counter) is a software that performs automatic cell counting 
+#    BARCC (Brain Atlas Regional Cell Counter) is a software that performs automatic cell counting 
 #    of microscopy images and assists in the automation of image workup. 
 #    Copyright (C) <2025>  <George Taylor>
 
@@ -37,6 +37,7 @@ import io
 import logging
 import yaml
 import sys
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -111,7 +112,7 @@ class ImageProcessor:
 
     def load_config(self):
         """Load configuration from file if it exists"""
-        config_path = "regioner_config.yaml"
+        config_path = "barcc_config.yaml"
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 try:
@@ -140,7 +141,7 @@ class ImageProcessor:
                 'cell_detection': cell_config_dict,
                 'preprocessing': self.preprocess_config.__dict__
             }
-            with open("regioner_config.yaml", 'w') as f:
+            with open("barcc_config.yaml", 'w') as f:
                 yaml.dump(config, f)
         except Exception as e:
             logger.error(f"Failed to save config: {e}", exc_info=True)
@@ -292,9 +293,12 @@ class ImageProcessor:
         return img, labels
 
 # This is old so we should drop it to prevent obscurity
-def binary_mask_cell_count(background_pil):
-    """Enhanced cell detection using ImageProcessor class"""
-    processor = ImageProcessor()
+def binary_mask_cell_count(background_pil, processor=None):
+    """Enhanced cell detection using ImageProcessor class.
+    If processor is provided, use its current config (important for live Mask Settings + Autotune).
+    """
+    if processor is None:
+        processor = ImageProcessor()
     img, labels = processor.detect_cells(background_pil)
     return img, labels > 0
     
@@ -389,6 +393,11 @@ class PDFViewer:
         self.brush_size = tk.IntVar(value=4.0)
         self.DEFAULT_COLOR = 'black'
 
+        # Grouped paint strokes: each continuous mouse-down to mouse-up is one "structural boundary"
+        self._paint_group_counter = 0
+        self.current_paint_group = None
+        self.named_paint_groups = {}   # group_tag (e.g. 'paintgroup_5') -> name
+
         # Crop / edit variables
         self.crop_mode = False
         self.crop_rect = None
@@ -406,7 +415,21 @@ class PDFViewer:
         self.mask_edit_add = True  # True = add cells, False = remove cells
         self.current_mask = None   # reference to the current mask being edited
         # self.auto_mask = np.array([[0,0,0], [0,0,0]])
-        self.auto_mask = False 
+        self.auto_mask = False
+
+        # View zoom (separate from PDF render zoom)
+        self.view_scale = 1.0
+        self.min_scale = 0.2
+        self.max_scale = 8.0
+
+        # Display options
+        self.show_zone_labels = False
+
+        # Transparent menu / window mode
+        self.transparent_mode = tk.BooleanVar(value=False)
+
+        # Persistent paint layer (this is the key to zoom-safe painting)
+        self.paint_layer = None  # RGBA PIL Image, created when background is loaded
 
         # Manual edit masks
         self.manual_add_mask = None
@@ -470,7 +493,7 @@ class PDFViewer:
         filemenu.add_command(label="Save Paint", command=self.save_paint_to_pdf)
         filemenu.add_command(label="Save Flattened Image", command=self.save_flattened_image)
         filemenu.add_command(label="Next Image", command=self.next_image)
-        filemenu.add_command(label="Help", command=self.show_help)
+        filemenu.add_command(label="User Manual", command=self.open_user_manual)
         filemenu.add_command(label="Exit", command=self.master.destroy)
 
         # Create Edit menu dropdown
@@ -509,10 +532,32 @@ class PDFViewer:
         maskmenu.add_command(label="Remove Cell", command=self.start_remove_cells)
         maskmenu.add_command(label="Finish Mask Edit", command=self.stop_mask_edit)
 
+        # Create View menu dropdown
+        viewmenu = tk.Menu(self.menu)
+        self.menu.add_cascade(label="View", menu=viewmenu)
+
+        def toggle_transparent_mode():
+            alpha = 0.3 if self.transparent_mode.get() else 1.0
+            self.master.attributes('-alpha', alpha)
+
+        viewmenu.add_checkbutton(
+            label="Transparent Mode (70%)",
+            variable=self.transparent_mode,
+            command=toggle_transparent_mode
+        )
+
         # Create Cell menu dropdown
         cellmenu = tk.Menu(self.menu)
         self.menu.add_cascade(label="Cell", menu=cellmenu)
         cellmenu.add_command(label="Count Cells", command=self.count_cells)
+
+        def toggle_zone_labels():
+            self.show_zone_labels = not self.show_zone_labels
+            self.show_page()
+
+        cellmenu.add_checkbutton(label="Show Zone Labels & Counts", 
+                                 variable=tk.BooleanVar(value=self.show_zone_labels),
+                                 command=toggle_zone_labels)
 
 
         # Add highlight regions button to manually enable this
@@ -538,6 +583,16 @@ class PDFViewer:
         self.scrolly.configure(command=self.output.yview)
         self.scrollx.configure(command=self.output.xview)
 
+        # Enable mouse wheel zoom
+        self._bind_mousewheel()
+
+        # Alt + drag panning
+        self._pan_start_x = None
+        self._pan_start_y = None
+        self.output.bind("<Alt-ButtonPress-1>", self._start_pan)
+        self.output.bind("<Alt-B1-Motion>", self._do_pan)
+        self.output.bind("<Alt-ButtonRelease-1>", self._end_pan)
+
     # End of UI, beginning of functions
 
     def split_tiff(self):
@@ -552,7 +607,7 @@ class PDFViewer:
         self.show_brush_settings()
         self.old_x = None
         self.old_y = None
-        #self.line_width = self.choose_size_button.get()
+        self.current_paint_group = None
         self.color = self.DEFAULT_COLOR
         self.active_button = None
         self.use_pen()
@@ -560,6 +615,8 @@ class PDFViewer:
         self.output.bind('<Button-1>', self.paint)
         self.output.bind('<B1-Motion>', self.paint)
         self.output.bind('<ButtonRelease-1>', self.reset)
+        # Right-click to name a painted region (comparable to atlas region labeling)
+        self.output.bind('<Button-3>', self.name_painted_region)
         self.draw_type = 'drag'
         self.master.bind('<s>', self.reset_toggle)
         self.draw_status = self.menu.add_command(label="Pen: "+str(self.draw_type))
@@ -569,10 +626,36 @@ class PDFViewer:
         self.output.unbind('<B1-Motion>')
         self.output.unbind('<ButtonRelease-1>') 
         self.output.unbind('<Button-1>')
+        self.output.unbind('<Button-3>')
         self.output.bind('<Button-1>', self.highlight_region)
         self.menu.delete(7)
         self.current_state = None
+
+        # Auto-assign default names to any painted strokes/groups that the user didn't explicitly name
+        # This ensures the spreadsheet always gets populated with Painted Regions when using the paint tool.
+        paint_items = self.output.find_withtag('paint')
+        all_current_groups = set()
+        for item in paint_items:
+            for tag in self.output.gettags(item):
+                if tag.startswith('paintgroup_'):
+                    all_current_groups.add(tag)
+
+        for group_tag in all_current_groups:
+            if group_tag not in self.named_paint_groups:
+                self.named_paint_groups[group_tag] = None  # will get default name in convert
+
+        # Convert (named + auto-defaulted) paint groups to proper zones (for cell counting)
+        self._convert_named_paints_to_zones()
+
+        # Now that the user has finished painting, bake everything into the paint_layer
+        # and clean up the temporary canvas items. This is when labeling is "finalized".
+        if self.paint_layer is not None:
+            self._commit_canvas_paint_to_layer()
+
+        self.output.delete('paint')   # Remove all temporary paint strokes from canvas
         self.save_paint()
+        self.named_paint_groups.clear()
+        self.current_paint_group = None
         self.show_page()
 
     def save_paint(self):
@@ -666,6 +749,11 @@ class PDFViewer:
             self.img = Image.open(path)
             self.atlas_filetype = 'png'
             clear_preprocess_cache()
+
+            # Ensure we have a paint layer even when loading a paint file as base
+            if self.original_background is not None and self.paint_layer is None:
+                self.paint_layer = Image.new('RGBA', self.original_background.size, (0, 0, 0, 0))
+
             self.show_page()
 
     def use_pen(self):
@@ -681,17 +769,45 @@ class PDFViewer:
         self.eraser_on = eraser_mode
 
     def paint(self, event):
+        """Draw freehand using the pen. Coordinates are converted properly for the current zoom level."""
         self.line_width = self.brush_size.get()
-        # paint_color = 'white' if self.eraser_on else self.color
         paint_color = self.color
-        if self.old_x and self.old_y:
-            coords = (self.old_x, self.old_y, event.x, event.y)
-            current_line = self.output.create_line(coords,
-                               width=self.line_width, fill=paint_color,
-                               capstyle=tk.ROUND, smooth=tk.TRUE, splinesteps=36,
-                               tags='paint')
-        self.old_x = event.x
-        self.old_y = event.y
+
+        # Convert current mouse position to image space (this is the source of truth)
+        cx = self.output.canvasx(event.x)
+        cy = self.output.canvasy(event.y)
+        ix, iy = self._canvas_to_image(cx, cy)
+
+        # Start of a new continuous stroke?
+        if self.old_x is None and self.old_y is None:
+            self._paint_group_counter += 1
+            self.current_paint_group = f"paintgroup_{self._paint_group_counter}"
+            self.old_x = ix
+            self.old_y = iy
+            return  # nothing to draw on first point
+
+        # We have a previous point in image space
+        prev_ix = self.old_x
+        prev_iy = self.old_y
+
+        # Convert both points back to canvas space for creating the visual line (correct for current zoom)
+        prev_cx, prev_cy = self._image_to_canvas(prev_ix, prev_iy)
+        curr_cx, curr_cy = self._image_to_canvas(ix, iy)
+
+        tags = ('paint', self.current_paint_group)
+        self.output.create_line(
+            (prev_cx, prev_cy, curr_cx, curr_cy),
+            width=self.line_width,
+            fill=paint_color,
+            capstyle=tk.ROUND,
+            smooth=tk.TRUE,
+            splinesteps=36,
+            tags=tags
+        )
+
+        # Store the new point in image space for the next segment
+        self.old_x = ix
+        self.old_y = iy
     
     def erase(self, event):
         if len(self.output.find_withtag('paint')) == 0:
@@ -722,6 +838,298 @@ class PDFViewer:
 
     def reset(self, event):
         self.old_x, self.old_y = None, None
+        self.current_paint_group = None  # End the current continuous stroke group
+
+        # Commit the just-finished stroke to the persistent paint_layer for zoom safety.
+        # IMPORTANT: We do NOT delete the 'paint' canvas items here.
+        # They remain on the canvas so the user can still right-click them to label/name regions
+        # (this restores the labeling feature that was broken by the zoom refactor).
+        if self.paint_layer is not None:
+            self._commit_canvas_paint_to_layer()
+
+    def name_painted_region(self, event):
+        """Right-click on a paint stroke to name the entire connected boundary.
+
+        All line segments belonging to the same continuous stroke (mouse-down to mouse-up)
+        are treated as one structural region and colored yellow together.
+
+        Fixed to use proper canvas coordinates so labeling works after zoom.
+        """
+        # Convert to canvas coordinates (critical after zoom + scrolling)
+        cx = self.output.canvasx(event.x)
+        cy = self.output.canvasy(event.y)
+
+        # Tolerance in screen pixels; keep it reasonable even after zoom
+        tolerance = 12
+        candidates = self.output.find_overlapping(cx - tolerance, cy - tolerance,
+                                                  cx + tolerance, cy + tolerance)
+
+        paint_items = [item for item in candidates if 'paint' in self.output.gettags(item)]
+        if not paint_items:
+            return
+
+        clicked_item = paint_items[0]
+        tags = self.output.gettags(clicked_item)
+
+        # Find which group this segment belongs to
+        group_tag = None
+        for t in tags:
+            if t.startswith('paintgroup_'):
+                group_tag = t
+                break
+
+        if not group_tag:
+            # Very old strokes without group tags - treat as singleton
+            group_tag = 'paintgroup_legacy'
+            self.output.addtag_withtag(group_tag, clicked_item)
+
+        # Get ALL segments that belong to this connected stroke
+        all_segments = self.output.find_withtag(group_tag)
+        if not all_segments:
+            return
+
+        # Color the entire connected boundary yellow (selection for renaming)
+        for item in all_segments:
+            self.output.itemconfig(item, fill='#ffcc00')
+
+        current_name = self.named_paint_groups.get(group_tag, "")
+        prompt = "Enter a name for this painted region:"
+        if current_name:
+            prompt = f"Rename painted region (current: {current_name}):"
+
+        name = simpledialog.askstring("Painted Region Name", prompt, initialvalue=current_name)
+        if name is None:
+            return
+
+        name = name.strip()
+        if not name:
+            if group_tag in self.named_paint_groups:
+                del self.named_paint_groups[group_tag]
+            for item in all_segments:
+                self.output.itemconfig(item, fill=self.DEFAULT_COLOR)
+            return
+
+        self.named_paint_groups[group_tag] = name
+
+        # Keep the whole group yellow to show it's a named structural boundary
+        for item in all_segments:
+            self.output.itemconfig(item, fill='#ffcc00')
+
+        logger.info(f"Named paint group {group_tag} as '{name}' ({len(all_segments)} segments)")
+
+    def _commit_canvas_paint_to_layer(self):
+        """Rasterize current 'paint' tagged canvas items into the persistent self.paint_layer.
+        This makes painting survive zoom, show_page calls, etc.
+        """
+        if self.paint_layer is None:
+            return
+
+        paint_items = self.output.find_withtag('paint')
+        if not paint_items:
+            return
+
+        draw = ImageDraw.Draw(self.paint_layer)
+
+        for line in paint_items:
+            coords = self.output.coords(line)
+            if not coords:
+                continue
+
+            # Convert canvas coords to image (model) coordinates
+            points = []
+            for i in range(0, len(coords), 2):
+                cx = coords[i]
+                cy = coords[i + 1]
+                ix = int(cx / self.view_scale)
+                iy = int(cy / self.view_scale)
+                points.append((ix, iy))
+
+            if len(points) < 2:
+                continue
+
+            width = self.output.itemcget(line, 'width')
+            try:
+                width = int(float(width))
+            except Exception:
+                width = 3
+
+            fill = self.output.itemcget(line, 'fill')
+
+            radius = max(1, width // 2)
+            for px, py in points:
+                draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=fill)
+            draw.line(points, fill=fill, width=width, joint="curve")
+
+    def _convert_named_paints_to_zones(self):
+        """Convert named paint *groups* (connected strokes) into zone entries.
+
+        Each named group (one continuous drawing action) gets a single zone_id,
+        so the entire structural boundary is treated as one region for cell counting.
+        """
+        if not self.named_paint_groups:
+            return
+
+        if self.current_page not in self.zone_counters:
+            self.zone_counters[self.current_page] = 0
+        if self.current_page not in self.zone_names:
+            self.zone_names[self.current_page] = {}
+
+        # Determine target size for the zone mask
+        if self.original_background is not None:
+            target_size = self.original_background.size
+        elif self.background_image is not None:
+            target_size = self.background_image.size
+        else:
+            return
+
+        # Get or create the zone mask for this page
+        if self.current_page not in self.mask_images:
+            self.mask_images[self.current_page] = Image.new('L', target_size, 0)
+
+        mask_img = self.mask_images[self.current_page].copy()
+        draw = ImageDraw.Draw(mask_img)
+
+        for group_tag, name in list(self.named_paint_groups.items()):
+            segments = self.output.find_withtag(group_tag)
+            if not segments:
+                continue
+
+            # One zone id for the entire connected group
+            self.zone_counters[self.current_page] += 1
+            zone_id = self.zone_counters[self.current_page]
+
+            if name is None or not str(name).strip():
+                clean_name = f"Painted Region {zone_id}"
+            else:
+                clean_name = str(name).strip() or f"Painted Region {zone_id}"
+
+            self.zone_names[self.current_page][zone_id] = clean_name
+            # Update the groups dict too for consistency
+            self.named_paint_groups[group_tag] = clean_name
+
+            # Draw every segment belonging to this group using the same zone_id
+            for item_id in segments:
+                try:
+                    coords = self.output.coords(item_id)
+                    if not coords or len(coords) < 4:
+                        continue
+
+                    width = self.output.itemcget(item_id, 'width')
+                    try:
+                        width = int(float(width))
+                    except Exception:
+                        width = 3
+
+                    # Convert canvas coords → image coords, properly accounting for current zoom scale
+                    # This ensures painted named regions get correct zone pixels in the mask even after zooming.
+                    points = []
+                    for i in range(0, len(coords), 2):
+                        cx = coords[i]
+                        cy = coords[i + 1]
+                        ix = int( (cx / self.view_scale) - self.img_x )
+                        iy = int( (cy / self.view_scale) - self.img_y )
+                        points.append((ix, iy))
+
+                    if len(points) < 2:
+                        continue
+
+                    radius = max(1, width // 2)
+                    for px, py in points:
+                        draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=zone_id)
+                    draw.line(points, fill=zone_id, width=width, joint="curve")
+
+                except Exception as e:
+                    logger.error(f"Failed to rasterize segment in group {group_tag}: {e}")
+
+            logger.info(f"Converted named paint group '{clean_name}' ({group_tag}) → zone {zone_id}")
+
+        # Update the mask
+        self.mask_images[self.current_page] = mask_img
+
+    def _force_paint_strokes_to_zones(self, paint_items):
+        """
+        Last-resort fallback: If the user has painted strokes on the canvas
+        but they didn't get turned into zones (e.g. no right-click naming happened),
+        convert whatever paint is still present into default "Painted Region" zones
+        so that Count Cells produces a useful spreadsheet.
+        """
+        if not paint_items:
+            return
+
+        if self.current_page not in self.zone_counters:
+            self.zone_counters[self.current_page] = 0
+        if self.current_page not in self.zone_names:
+            self.zone_names[self.current_page] = {}
+
+        if self.original_background is not None:
+            target_size = self.original_background.size
+        elif self.background_image is not None:
+            target_size = self.background_image.size
+        else:
+            return
+
+        if self.current_page not in self.mask_images:
+            self.mask_images[self.current_page] = Image.new('L', target_size, 0)
+
+        mask_img = self.mask_images[self.current_page].copy()
+        draw = ImageDraw.Draw(mask_img)
+
+        # Group remaining paint items by their group tag if present, otherwise treat all as one group
+        groups = {}
+        for item in paint_items:
+            group_tag = None
+            for tag in self.output.gettags(item):
+                if tag.startswith('paintgroup_'):
+                    group_tag = tag
+                    break
+            if group_tag is None:
+                group_tag = 'unnamed_paint_group'
+            if group_tag not in groups:
+                groups[group_tag] = []
+            groups[group_tag].append(item)
+
+        for group_tag, items in groups.items():
+            self.zone_counters[self.current_page] += 1
+            zone_id = self.zone_counters[self.current_page]
+
+            default_name = f"Painted Region {zone_id}"
+            self.zone_names[self.current_page][zone_id] = default_name
+
+            for item_id in items:
+                try:
+                    coords = self.output.coords(item_id)
+                    if not coords or len(coords) < 4:
+                        continue
+
+                    width = self.output.itemcget(item_id, 'width')
+                    try:
+                        width = int(float(width))
+                    except Exception:
+                        width = 3
+
+                    # Use the same corrected coordinate mapping as the main convert function
+                    points = []
+                    for i in range(0, len(coords), 2):
+                        cx = coords[i]
+                        cy = coords[i + 1]
+                        ix = int( (cx / self.view_scale) - self.img_x )
+                        iy = int( (cy / self.view_scale) - self.img_y )
+                        points.append((ix, iy))
+
+                    if len(points) < 2:
+                        continue
+
+                    radius = max(1, width // 2)
+                    for px, py in points:
+                        draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=zone_id)
+                    draw.line(points, fill=zone_id, width=width, joint="curve")
+
+                except Exception as e:
+                    logger.error(f"Failed to force-convert paint item to zone: {e}")
+
+            logger.info(f"Force-converted paint group '{group_tag}' → zone {zone_id} ('{default_name}')")
+
+        self.mask_images[self.current_page] = mask_img
 
     def show_brush_settings(self): # This is the layout to be applied to all other spawned windows
         brush_win = None
@@ -729,6 +1137,9 @@ class PDFViewer:
         window = Toplevel(self.master)
         window.attributes('-topmost', 'true')
         window.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        if self.transparent_mode.get():
+            window.attributes('-alpha', 0.3)
 
         window.title("Brush Settings")
         tk.Label(window, text="Brush Size: ").grid(row=2, column=0)
@@ -744,6 +1155,9 @@ class PDFViewer:
         window = Toplevel(self.master)
         window.attributes('-topmost', 'true')
         window.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+        if self.transparent_mode.get():
+            window.attributes('-alpha', 0.3)
 
         window.title("Scale Settings")
         # Scale controls
@@ -766,6 +1180,9 @@ class PDFViewer:
         window.attributes('-topmost', 'true')
         window.protocol("WM_DELETE_WINDOW", self.disable_event)
 
+        if self.transparent_mode.get():
+            window.attributes('-alpha', 0.3)
+
         window.title("Rotate Settings")
         rotation_label = ttk.Label(window, text="Rotate (degrees):")
         rotation_label.grid(row=0, column=0)
@@ -783,6 +1200,9 @@ class PDFViewer:
         window.attributes('-topmost', 'true')
         window.protocol("WM_DELETE_WINDOW", self.disable_event)
         
+        if self.transparent_mode.get():
+            window.attributes('-alpha', 0.3)
+
         window.title("Brightness Settings")
         brightness_label = ttk.Label(window, text="Brightness:")
         brightness_label.grid(row=0, column=0)
@@ -793,14 +1213,22 @@ class PDFViewer:
         close_button = tk.Button(window, text="Close", command=lambda: window.destroy())
         close_button.grid(row=10, column=1, sticky=tk.SE, padx=5, pady=5)
 
-    def show_mask_settings(self):
+    def show_mask_settings(self, restore_geometry=None):
         mask_settings_win = None
         window = mask_settings_win
         window = Toplevel(self.master)
         window.attributes('-topmost', 'true')
-        window.protocol("WM_DELETE_WINDOW", self.disable_event)
+        # Allow the window's X button to close the dialog properly
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
+
+        # Apply transparent mode (70% opacity) if enabled
+        if self.transparent_mode.get():
+            window.attributes('-alpha', 0.3)
 
         window.title("Mask Settings")
+
+        if restore_geometry:
+            window.geometry(restore_geometry)
 
         # Configure grid layout
         window.columnconfigure(0, weight=1)
@@ -810,9 +1238,71 @@ class PDFViewer:
             self.image_processor.save_config()
 
         def load_settings():
+            geom = window.geometry()
             self.image_processor.load_config()
             window.destroy()  # Reopen to refresh values
-            self.show_mask_settings()
+            self.show_mask_settings(restore_geometry=geom)
+
+        # --- Autotune helpers ---
+        def _apply_autotune_and_refresh(adjust_func):
+            geom = window.geometry()
+            adjust_func()
+            window.destroy()
+            self.show_mask_settings(restore_geometry=geom)
+            # Automatically refresh the mask visualization using the new autotuned settings
+            self.show_cell_mask_threshold(calculate=True)
+
+        def autotune_more_cells():
+            cfg = self.image_processor.cell_config
+            cfg.min_cell_size = max(5, cfg.min_cell_size - 6)
+            cfg.peak_min_intensity = max(0.01, round(cfg.peak_min_intensity - 0.06, 2))
+            cfg.circularity_threshold = max(0.25, round(cfg.circularity_threshold - 0.06, 2))
+            cfg.min_peak_distance = max(2, cfg.min_peak_distance - 1)
+            if cfg.threshold_method == "manual":
+                cfg.manual_threshold = max(0.05, round(cfg.manual_threshold - 0.08, 2))
+            # Slightly more sensitive preprocessing
+            pcfg = self.image_processor.preprocess_config
+            if pcfg.denoise_method != "none":
+                pcfg.nr_gaussian_sigma = max(0.3, round(pcfg.nr_gaussian_sigma - 0.3, 1))
+            _apply_autotune_and_refresh(lambda: None)
+
+        def autotune_less_cells():
+            cfg = self.image_processor.cell_config
+            cfg.min_cell_size += 6
+            cfg.peak_min_intensity = min(0.95, round(cfg.peak_min_intensity + 0.06, 2))
+            cfg.circularity_threshold = min(0.95, round(cfg.circularity_threshold + 0.06, 2))
+            cfg.min_peak_distance += 1
+            if cfg.threshold_method == "manual":
+                cfg.manual_threshold = min(0.95, round(cfg.manual_threshold + 0.08, 2))
+            _apply_autotune_and_refresh(lambda: None)
+
+        def autotune_bigger_cells():
+            cfg = self.image_processor.cell_config
+            cfg.min_cell_size += 8
+            cfg.max_cell_size += 25
+            cfg.circularity_threshold = min(0.92, round(cfg.circularity_threshold + 0.04, 2))
+            cfg.watershed_compactness = min(0.8, round(cfg.watershed_compactness + 0.15, 2))
+            _apply_autotune_and_refresh(lambda: None)
+
+        def autotune_smaller_cells():
+            cfg = self.image_processor.cell_config
+            cfg.min_cell_size = max(5, cfg.min_cell_size - 8)
+            cfg.max_cell_size = max(20, cfg.max_cell_size - 20)
+            cfg.circularity_threshold = max(0.3, round(cfg.circularity_threshold - 0.04, 2))
+            _apply_autotune_and_refresh(lambda: None)
+
+        def autotune_brighter_cells():
+            cfg = self.image_processor.cell_config
+            cfg.peak_min_intensity = min(0.95, round(cfg.peak_min_intensity + 0.10, 2))
+            cfg.circularity_threshold = min(0.9, round(cfg.circularity_threshold + 0.03, 2))
+            _apply_autotune_and_refresh(lambda: None)
+
+        def autotune_dimmer_cells():
+            cfg = self.image_processor.cell_config
+            cfg.peak_min_intensity = max(0.01, round(cfg.peak_min_intensity - 0.10, 2))
+            # Also relax size a little to catch dim but real cells
+            cfg.min_cell_size = max(5, cfg.min_cell_size - 3)
+            _apply_autotune_and_refresh(lambda: None)
 
 
         def generate_setting(frame, attr, value, row, config):
@@ -1014,6 +1504,54 @@ class PDFViewer:
         ttk.Button(control_frame, text="Load", command=load_settings).grid(row=0, column=1, padx=5)
         ttk.Button(control_frame, text="Show Mask", command=self.show_cell_mask_threshold).grid(row=0, column=2, padx=5)
 
+        # Autotune panel (second row in control_frame)
+        ttk.Label(control_frame, text="Autotune:").grid(row=1, column=0, padx=(5, 8), pady=(6, 2), sticky='w')
+        auto_btns = ttk.Frame(control_frame)
+        auto_btns.grid(row=1, column=1, columnspan=3, pady=(6, 2), sticky='w')
+
+        ttk.Button(auto_btns, text="More cells", width=12, command=autotune_more_cells).grid(row=0, column=0, padx=2, pady=1)
+        ttk.Button(auto_btns, text="Less cells", width=12, command=autotune_less_cells).grid(row=0, column=1, padx=2, pady=1)
+        ttk.Button(auto_btns, text="Bigger cells", width=12, command=autotune_bigger_cells).grid(row=0, column=2, padx=2, pady=1)
+        ttk.Button(auto_btns, text="Smaller cells", width=12, command=autotune_smaller_cells).grid(row=1, column=0, padx=2, pady=1)
+        ttk.Button(auto_btns, text="Brighter cells", width=12, command=autotune_brighter_cells).grid(row=1, column=1, padx=2, pady=1)
+        ttk.Button(auto_btns, text="Dimmer cells", width=12, command=autotune_dimmer_cells).grid(row=1, column=2, padx=2, pady=1)
+
+        # Presets row
+        ttk.Label(control_frame, text="Presets:").grid(row=2, column=0, padx=(5, 8), pady=(8, 2), sticky='w')
+        preset_frame = ttk.Frame(control_frame)
+        preset_frame.grid(row=2, column=1, columnspan=3, pady=(8, 2), sticky='w')
+
+        self.preset_combo = ttk.Combobox(preset_frame, width=25, state="readonly")
+        self.preset_combo.grid(row=0, column=0, padx=2)
+
+        def refresh_preset_list():
+            presets = self.load_presets()
+            self.preset_combo['values'] = list(presets.keys())
+            if presets:
+                self.preset_combo.set(list(presets.keys())[0])
+
+        def do_load_preset():
+            name = self.preset_combo.get()
+            if name and self.load_preset(name):
+                window.destroy()
+                self.show_mask_settings()
+
+        def do_save_preset():
+            self.save_current_as_preset()
+            refresh_preset_list()
+
+        def do_delete_preset():
+            name = self.preset_combo.get()
+            if name:
+                self.delete_preset(name)
+                refresh_preset_list()
+
+        ttk.Button(preset_frame, text="Load", width=8, command=do_load_preset).grid(row=0, column=1, padx=2)
+        ttk.Button(preset_frame, text="Save As", width=8, command=do_save_preset).grid(row=0, column=2, padx=2)
+        ttk.Button(preset_frame, text="Delete", width=8, command=do_delete_preset).grid(row=0, column=3, padx=2)
+
+        refresh_preset_list()
+
         # Create frame for radiobuttons and their options
         radio_frame = ttk.Frame(window)
         radio_frame.grid(row=1, column=0, sticky='nwes', padx=5, pady=5)
@@ -1196,12 +1734,13 @@ class PDFViewer:
 
 
     def edit_mask_draw(self, event, eraser=False):
-        """Draw directly on the binary mask"""
+        """Draw directly on the binary mask. Coordinates respect current zoom level."""
         if not self.editing_mask or self.current_mask is None:
             return
 
-        x = int(self.output.canvasx(event.x))
-        y = int(self.output.canvasy(event.y))
+        cx = self.output.canvasx(event.x)
+        cy = self.output.canvasy(event.y)
+        x, y = self._canvas_to_image(cx, cy)   # convert to native image space
         r = int(self.brush_size.get())
 
         draw = ImageDraw.Draw(self.current_mask)
@@ -1251,68 +1790,243 @@ class PDFViewer:
         factor = 1 + (self.brightness / 100.0)
         return enhancer.enhance(factor)
 
-    def show_help(self):
-        help_win = tk.Toplevel(self.master)
-        help_win.title("User Manual")
-        help_win.geometry("800x600")
+    def open_user_manual(self):
+        """Open the polished PDF user manual (replaces the old weak in-app text help)."""
+        # The manual lives in the repository root, one level above the Application/ directory
+        manual_path = os.path.join(os.path.dirname(__file__), "..", "BARCC_User_Manual.pdf")
+        try:
+            os.startfile(os.path.normpath(manual_path))
+        except Exception as e:
+            messagebox.showerror("Error Opening Manual", f"Could not open the user manual:\n{e}")
 
-        text = tk.Text(help_win, wrap=tk.WORD)
-        text.pack(expand=True, fill=tk.BOTH)
-        scrollbar = tk.Scrollbar(help_win, command=text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        text.config(yscrollcommand=scrollbar.set)
+    # --- Configuration Presets System ---
 
-        manual_content = """
-        Table of Contents
-1. Introduction
-2. Importing Files
-3. Manipulating the Atlas
-4. Highlighting Regions
-5. Counting Cells
-6. Saving Outputs
-7. Hotkeys
-8. Undo Functionality
+    def _get_presets_path(self):
+        presets_dir = os.path.join(os.path.expanduser("~"), ".barc")
+        os.makedirs(presets_dir, exist_ok=True)
+        return os.path.join(presets_dir, "presets.json")
 
-1. Introduction
-This GUI is designed for regional analysis of immunofluorescence (IF) images. It allows users to overlay atlas sections on TIFF images, highlight specific regions, count cells within those regions, and export results.
+    def load_presets(self):
+        path = self._get_presets_path()
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
 
-2. Importing Files
-- Use "File > Import Atlas Section" to load a PDF atlas file.
-- Use the "Import TIFF" button to load a TIFF image file. The image will be resized to fit the window.
+    def save_presets(self, presets_dict):
+        path = self._get_presets_path()
+        try:
+            with open(path, "w") as f:
+                json.dump(presets_dict, f, indent=2)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save presets: {e}")
 
-3. Manipulating the Atlas
-- "Crop": Enables crop mode to select and crop a region of the atlas.
-- "Move Atlas": Enables drag mode to move the atlas overlay.
-- "Rotate": Enter degrees and click "Rotate" to rotate the atlas.
-- "Resize": Enter a scale factor and click "Resize" to scale the atlas.
+    def save_current_as_preset(self, name=None):
+        if name is None:
+            name = simpledialog.askstring("Save Preset", "Enter preset name:")
+            if not name:
+                return
 
-4. Highlighting Regions
-- Click on a region in the atlas to highlight it with a translucent yellow overlay.
-- A prompt will appear to name the region (optional).
+        presets = self.load_presets()
 
-5. Counting Cells
-- After highlighting regions, click "Count Cells" to analyze cells in the highlighted areas.
-- Results are saved to an Excel file with region names and cell counts.
+        preset_data = {
+            "cell_detection": self.image_processor.cell_config.__dict__.copy(),
+            "preprocessing": self.image_processor.preprocess_config.__dict__.copy(),
+        }
+        presets[name] = preset_data
+        self.save_presets(presets)
+        messagebox.showinfo("Preset Saved", f"Preset '{name}' saved successfully.")
 
-6. Saving Outputs
-- "File > Save Flattened Image": Saves the combined image and atlas as a JPG.
-- Cell count results prompt for an Excel save location.
+    def load_preset(self, name):
+        presets = self.load_presets()
+        if name not in presets:
+            messagebox.showerror("Error", f"Preset '{name}' not found.")
+            return False
 
-7. Hotkeys
-- Ctrl+Z: Undo the last action.
-- Ctrl+S: Save the flattened image.
+        data = presets[name]
+        try:
+            for key, value in data.get("cell_detection", {}).items():
+                if hasattr(self.image_processor.cell_config, key):
+                    setattr(self.image_processor.cell_config, key, value)
 
-8. Undo Functionality
-- Actions like cropping, moving, rotating, resizing, and highlighting can be undone with Ctrl+Z.
-"""
-        text.insert(tk.END, manual_content)
-        text.config(state=tk.DISABLED)
+            for key, value in data.get("preprocessing", {}).items():
+                if hasattr(self.image_processor.preprocess_config, key):
+                    setattr(self.image_processor.preprocess_config, key, value)
+
+            return True
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load preset: {e}")
+            return False
+
+    def delete_preset(self, name):
+        presets = self.load_presets()
+        if name in presets:
+            del presets[name]
+            self.save_presets(presets)
+            messagebox.showinfo("Preset Deleted", f"Preset '{name}' deleted.")
+        else:
+            messagebox.showerror("Error", f"Preset '{name}' not found.")
+
+    def _show_busy_dialog(self, title="Working"):
+        """Create a progress dialog with a determinate loading bar.
+        Returns an object with .set_progress(percent, message) and .close() methods.
+        """
+        transparent = self.transparent_mode.get()
+
+        class ProgressDialog:
+            def __init__(self, parent, title, transparent):
+                self.window = Toplevel(parent)
+                self.window.title(title)
+                self.window.attributes('-topmost', True)
+                self.window.resizable(False, False)
+                self.window.protocol("WM_DELETE_WINDOW", lambda: None)
+
+                if transparent:
+                    self.window.attributes('-alpha', 0.3)
+
+                self.label = ttk.Label(self.window, text="Initializing...")
+                self.label.pack(padx=20, pady=(15, 5))
+
+                self.progress = ttk.Progressbar(
+                    self.window, 
+                    orient='horizontal', 
+                    length=280, 
+                    mode='determinate',
+                    maximum=100
+                )
+                self.progress.pack(padx=20, pady=(0, 15))
+
+                self.window.update_idletasks()
+
+            def set_progress(self, percent, message=None):
+                self.progress['value'] = max(0, min(100, percent))
+                if message:
+                    self.label.config(text=message)
+                self.window.update_idletasks()
+
+            def close(self):
+                try:
+                    self.window.destroy()
+                except:
+                    pass
+
+        return ProgressDialog(self.master, title, transparent)
 
     def save_state(self):
         self.state_manager.save_state(self)
 
     def _undo_event(self, event=None):
         self.state_manager.undo(self)
+
+    # ------------------------------------------------------------------
+    # ZOOM FEATURE
+    # ------------------------------------------------------------------
+    def _bind_mousewheel(self):
+        """Bind mouse wheel for zoom (cross-platform)."""
+        self.output.bind("<MouseWheel>", self._on_mousewheel)      # Windows
+        self.output.bind("<Button-4>", self._on_mousewheel)        # Linux scroll up
+        self.output.bind("<Button-5>", self._on_mousewheel)        # Linux scroll down
+
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel zoom centered on mouse position."""
+        # Determine direction and factor
+        if event.num == 4 or event.delta > 0:
+            factor = 1.15  # zoom in
+        else:
+            factor = 1 / 1.15  # zoom out
+
+        self._apply_zoom(factor, event)
+
+    def _apply_zoom(self, factor, event=None):
+        """Apply zoom factor, keeping alignment of all layers."""
+        new_scale = self.view_scale * factor
+        if new_scale < self.min_scale or new_scale > self.max_scale:
+            return
+
+        # Get zoom center in canvas coordinates
+        if event is not None:
+            cx = self.output.canvasx(event.x)
+            cy = self.output.canvasy(event.y)
+        else:
+            # Fallback to center of visible area
+            cx = self.output.canvasx(self.output.winfo_width() / 2)
+            cy = self.output.canvasy(self.output.winfo_height() / 2)
+
+        # Scale all paint strokes around the mouse point (this keeps them aligned with image content)
+        self.output.scale('paint', cx, cy, factor, factor)
+
+        # Scale the logical positions of the atlas overlay
+        self.img_x = (self.img_x * factor) + (cx * (factor - 1))
+        self.img_y = (self.img_y * factor) + (cy * (factor - 1))
+
+        # Update scale
+        old_scale = self.view_scale
+        self.view_scale = new_scale
+
+        # Redraw, but preserve any active mask overlay so it doesn't disappear on zoom
+        if self.editing_mask and self.current_mask is not None:
+            # Regenerate red overlay for manual mask editing mode
+            mask_arr = np.array(self.current_mask)
+            overlay_rgba = np.zeros((*mask_arr.shape, 4), dtype=np.uint8)
+            overlay_rgba[mask_arr > 0] = [255, 0, 0, 255]
+            overlay_img = Image.fromarray(overlay_rgba)
+            self.show_page(mask=overlay_img)
+        elif getattr(self, 'auto_mask', None) is not None:
+            # Preserve the "Show Mask" / cell detection mask view
+            self.show_cell_mask_threshold(calculate=False)
+        else:
+            self.show_page()
+
+        # Update scroll region
+        self.output.config(scrollregion=self.output.bbox(tk.ALL))
+
+    # ------------------------------------------------------------------
+    # Alt + Drag Panning
+    # ------------------------------------------------------------------
+    def _start_pan(self, event):
+        self._pan_start_x = event.x
+        self._pan_start_y = event.y
+        self._pan_start_scrollx = self.output.xview()[0]
+        self._pan_start_scrolly = self.output.yview()[0]
+        self.output.config(cursor="fleur")
+
+    def _do_pan(self, event):
+        if self._pan_start_x is None:
+            return
+        dx = event.x - self._pan_start_x
+        dy = event.y - self._pan_start_y
+
+        # Convert pixel delta to scroll fraction
+        total_width = self.output.winfo_width()
+        total_height = self.output.winfo_height()
+
+        if total_width > 0:
+            new_x = self._pan_start_scrollx - (dx / total_width)
+            self.output.xview_moveto(new_x)
+        if total_height > 0:
+            new_y = self._pan_start_scrolly - (dy / total_height)
+            self.output.yview_moveto(new_y)
+
+    def _end_pan(self, event):
+        self._pan_start_x = None
+        self._pan_start_y = None
+        self.output.config(cursor="")
+
+    # ------------------------------------------------------------------
+    # Coordinate conversion helpers (critical for correct drawing after zoom)
+    # ------------------------------------------------------------------
+    def _canvas_to_image(self, cx, cy):
+        """Convert canvas coordinates to image (model) coordinates."""
+        if self.view_scale == 0:
+            return int(cx), int(cy)
+        return int(cx / self.view_scale), int(cy / self.view_scale)
+
+    def _image_to_canvas(self, ix, iy):
+        """Convert image (model) coordinates to canvas coordinates for display."""
+        return ix * self.view_scale, iy * self.view_scale
 
     def load_page_image(self):
         if self.atlas_filetype: 
@@ -1333,40 +2047,111 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
     def show_page(self, mask=None):
         img = self.load_page_image() or Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-        self.photo = ImageTk.PhotoImage(img)
+
         self.output.delete("all")
-        
+
+        scale = self.view_scale
+
         if self.background_image:
-            # Display original image on the left
-            display_bg = self.adjust_image(self.background_image)
-            self.background_photo = ImageTk.PhotoImage(display_bg)
-            self.bg_photo_id = self.output.create_image(0, 0, 
-                                                       image=self.background_photo, 
-                                                       anchor='nw', 
+            # Prefer original_background for higher quality when zooming
+            base_bg = self.original_background if self.original_background is not None else self.background_image
+            bg_display = self.adjust_image(base_bg)
+            if scale != 1.0:
+                new_w = max(1, int(bg_display.width * scale))
+                new_h = max(1, int(bg_display.height * scale))
+                bg_display = bg_display.resize((new_w, new_h), Image.BILINEAR)
+
+            self.background_photo = ImageTk.PhotoImage(bg_display)
+            self.bg_photo_id = self.output.create_image(0, 0,
+                                                       image=self.background_photo,
+                                                       anchor='nw',
                                                        tag='image')
 
-            
-            # If mask exists, display it on the left
-            # Display untouched image on the right for comparison
+            # === Draw persistent paint layer (this fixes the "paint disappears on zoom" bug) ===
+            if self.paint_layer is not None:
+                paint_display = self.paint_layer
+                if scale != 1.0:
+                    pw = max(1, int(paint_display.width * scale))
+                    ph = max(1, int(paint_display.height * scale))
+                    paint_display = paint_display.resize((pw, ph), Image.BILINEAR)
+                self.paint_photo = ImageTk.PhotoImage(paint_display)
+                self.paint_photo_id = self.output.create_image(0, 0,
+                                                               image=self.paint_photo,
+                                                               anchor='nw',
+                                                               tag='paint_layer')
+
             if mask is not None:
-                self.mask_photo = ImageTk.PhotoImage(mask)
-                offset_x = display_bg.width + 10  # 10 pixels spacing
-                self.bg_mask_photo_id = self.output.create_image(offset_x, 0, 
-                                                                image=self.background_photo, 
-                                                                anchor='nw', 
+                mask_display = mask
+                if scale != 1.0:
+                    mw = max(1, int(mask_display.width * scale))
+                    mh = max(1, int(mask_display.height * scale))
+                    mask_display = mask_display.resize((mw, mh), Image.NEAREST)
+                self.mask_photo = ImageTk.PhotoImage(mask_display)
+                offset_x = bg_display.width + 10
+                self.bg_mask_photo_id = self.output.create_image(offset_x, 0,
+                                                                image=self.background_photo,
+                                                                anchor='nw',
                                                                 tag='image')
-                self.mask_photo_id = self.output.create_image(0, 0, 
-                                                             image=self.mask_photo, 
-                                                             anchor='nw', 
+                self.mask_photo_id = self.output.create_image(0, 0,
+                                                             image=self.mask_photo,
+                                                             anchor='nw',
                                                              tag='mask')
-                
-        # Display atlas overlay
-        self.output.create_image(self.img_x, self.img_y, 
-                               image=self.photo, 
-                               anchor='nw', 
+
+        # Scale and place the atlas overlay at the (already scaled) self.img_x / self.img_y
+        atlas_display = img
+        if scale != 1.0:
+            aw = max(1, int(img.width * scale))
+            ah = max(1, int(img.height * scale))
+            atlas_display = img.resize((aw, ah), Image.BILINEAR)
+
+        self.photo = ImageTk.PhotoImage(atlas_display)
+        display_img_x = self.img_x
+        display_img_y = self.img_y
+
+        self.output.create_image(display_img_x, display_img_y,
+                               image=self.photo,
+                               anchor='nw',
                                tag='atlas')
-        
-        # Update scroll region to include both images
+
+        # --- Draw Zone Labels and Counts on the main image ---
+        if self.show_zone_labels and self.last_df is not None and self.current_page in self.mask_images:
+            try:
+                mask = np.array(self.mask_images[self.current_page])
+                zone_data = self.last_df.set_index('Zone')['Cell_Count'].to_dict() if 'Zone' in self.last_df.columns else {}
+
+                for zone_name, count in zone_data.items():
+                    # Find pixels belonging to this zone in the mask
+                    # We need to map zone_name back to zone_id
+                    # For simplicity, we search in zone_names
+                    zone_id = None
+                    for zid, zname in self.zone_names.get(self.current_page, {}).items():
+                        if zname == zone_name:
+                            zone_id = zid
+                            break
+
+                    if zone_id is None:
+                        continue
+
+                    coords = np.where(mask == zone_id)
+                    if len(coords[0]) == 0:
+                        continue
+
+                    # Compute center
+                    cy = int(np.mean(coords[0]))
+                    cx = int(np.mean(coords[1]))
+
+                    # Scale to current view
+                    screen_x = cx * scale + display_img_x
+                    screen_y = cy * scale + display_img_y
+
+                    label_text = f"{zone_name}\n({count})"
+                    self.output.create_text(screen_x, screen_y, text=label_text, fill="yellow",
+                                            font=("Helvetica", 10, "bold"), anchor="center",
+                                            tags="zone_label")
+            except Exception as e:
+                logger.warning(f"Failed to draw zone labels: {e}")
+
+        # Update scroll region
         self.output.config(scrollregion=self.output.bbox(tk.ALL))
 
 
@@ -1387,6 +2172,9 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             self.doc, self.num_pages = self.pdf_handler.open_pdf(self.path)
             self.atlas_filetype = 'pdf'
             self.zoom = 1.0
+            self.view_scale = 1.0
+            self.img_x = 0
+            self.img_y = 0
             self.current_page = 0
             self.page_images = {}
             self.mask_images = {}
@@ -1397,6 +2185,11 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
     def import_tiff(self):
         logger.info("Opening file dialog for TIFF selection")
+        self.named_paint_groups.clear()
+        self.current_paint_group = None
+        self.view_scale = 1.0
+        self.img_x = 0
+        self.img_y = 0
         tiff_path = fd.askopenfilename(filetypes=[("TIFF files", "*.tiff *.tif")])
         if tiff_path:
             logger.info(f"Opening TIFF file: {tiff_path}")
@@ -1420,6 +2213,10 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             new_size = (int(bw * scale), int(bh * scale))
             self.background_image = bg_RGBA.resize(new_size, Image.BILINEAR)
             self.original_background = self.background_image.copy()
+
+            # Create fresh transparent paint layer at native resolution
+            self.paint_layer = Image.new('RGBA', self.original_background.size, (0, 0, 0, 0))
+
             self.show_page()
 
     def save_flattened_image(self, event=None):
@@ -1700,16 +2497,50 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             messagebox.showerror("Error", "Please import a TIFF file first.")
             return
 
+        # Automatically stop the paint tool if it's still active.
+        # This ensures any painted regions are committed to the zone system
+        # before we try to count cells.
+        if getattr(self, 'current_state', None) == 'paint':
+            self.stop_paint()
+
+        # Robust fallback for painted regions:
+        # If there are still 'paint' items on the canvas (strokes the user drew),
+        # make sure they become zones with default names so the spreadsheet gets populated.
+        # This handles cases where naming didn't happen or the previous auto-logic missed them.
+        remaining_paint = self.output.find_withtag('paint')
+        if remaining_paint and self.current_page not in self.mask_images:
+            self._force_paint_strokes_to_zones(remaining_paint)
+            # Clean up the visual paint strokes now that they've been turned into zones
+            self.output.delete('paint')
+
         if self.current_page not in self.mask_images:
             logger.warning("Cell counting failed: No regions selected in atlas")
             messagebox.showerror("Error", "Please load and select regions in the atlas first.")
             return
 
+        # Guard: if there are still no zones defined for this page after auto-stopping paint,
+        # give a clear message instead of generating an empty spreadsheet.
+        page_zones = self.zone_names.get(self.current_page, {})
+        if not page_zones:
+            messagebox.showerror(
+                "No Regions Defined",
+                "No regions (zones) have been defined for this page.\n\n"
+                "To populate the spreadsheet:\n"
+                "• For atlas: Click on regions in the atlas overlay to name them.\n"
+                "• For paint: Draw with the Paint tool, right-click strokes to name them (or just draw and let Count Cells auto-assign 'Painted Region N' names), then click Count Cells."
+            )
+            return
+
+        progress = self._show_busy_dialog("Counting Cells")
+        progress.set_progress(10, "Preparing data...")
+
         # === Build Final Cell Mask ===
+        progress.set_progress(25, "Running cell detection...")
         background = self.original_background.convert('L')
-        _, auto_labels = binary_mask_cell_count(background)
+        _, auto_labels = binary_mask_cell_count(background, processor=self.image_processor)
         auto_mask = auto_labels > 0  # Boolean array
 
+        progress.set_progress(45, "Processing manual edits...")
         # Convert manual edit masks to boolean arrays
         base_size = background.size
         add_mask = np.zeros(auto_mask.shape, dtype=bool)
@@ -1737,6 +2568,7 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         # Use the region mask (zone map) separately
         region_mask_pil = self.mask_images[self.current_page]
 
+        progress.set_progress(65, "Counting cells per region...")
 
         annotated, df, counts = count_cells_in_zones(
             self.original_background,
@@ -1750,6 +2582,8 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
 
         self.background_image = annotated
         self.last_df = df
+
+        progress.set_progress(85, "Generating annotated image...")
         self.show_page()
 
         save_path = fd.asksaveasfilename(title="Save CSV", defaultextension=".csv", filetypes=[("Comma-separated values", "*.csv")])
@@ -1760,15 +2594,26 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         else:
             messagebox.showinfo("Cell Counts", f"Cell counts per zone: {dict(zip(df['Zone'], df['Cell_Count']))}")
 
+        if progress:
+            progress.set_progress(100, "Done")
+            progress.close()
+
     def show_cell_mask_threshold(self, event=None, calculate=True):
         """Display the combined (auto + manual) mask overlay"""
+        progress = None
+        if calculate:
+            progress = self._show_busy_dialog("Detecting Cells")
+            progress.set_progress(5, "Preparing image...")
+
         background = self.original_background.convert('L')
 
         # Run automatic detection
-        if calculate == True:
-            _, auto_labels = binary_mask_cell_count(background)
+        if calculate:
+            progress.set_progress(15, "Running cell detection...")
+            _, auto_labels = binary_mask_cell_count(background, processor=self.image_processor)
             auto_mask = auto_labels > 0
             self.auto_mask = auto_mask
+            progress.set_progress(55, "Building mask visualization...")
         else:
             auto_mask = self.auto_mask
 
@@ -1785,9 +2630,13 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
             remove_mask = remove_mask_arr > 0
 
         # Combine automatic and manual edits
+        if progress:
+            progress.set_progress(70, "Combining manual edits...")
         combined_mask = (auto_mask | add_mask) & ~remove_mask
 
         # Visualize combined mask on top of the original background
+        if progress:
+            progress.set_progress(85, "Generating visualization...")
         background = self.adjust_image(self.original_background)
         original_rgb = background.convert('RGB')
         vis_array = np.array(original_rgb.convert('RGBA'))
@@ -1802,7 +2651,13 @@ This GUI is designed for regional analysis of immunofluorescence (IF) images. It
         mask_img = Image.fromarray(alpha_array)
         mask_img = mask_img.resize(self.original_background.size, Image.NEAREST)
 
+        if progress:
+            progress.set_progress(95, "Displaying mask...")
         self.show_page(mask=mask_img)
+
+        if progress:
+            progress.set_progress(100, "Done")
+            progress.close()
 
     
     def next_image_experimental(self): # unused

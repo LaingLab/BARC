@@ -3,7 +3,7 @@ __pycache__
 *.xlsx
 
 # test directory
-regioner/Random_code/
+Application/Random_code/
 
 # collection of thoughts
 NOTES
@@ -11,4 +11,4 @@ NOTES
 
 # Data
 *.jpg
-regioner/Data/
+Application/Data/

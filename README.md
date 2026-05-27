@@ -28,8 +28,8 @@ sudo apt-get install python3-tk
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/LaingLab/RegionalCounter.git
-cd RegionalCounter
+git clone https://github.com/LaingLab/BARC.git
+cd BARC
 ```
 
 2. Install required packages:
@@ -41,12 +41,12 @@ pip install -r requirements.txt
 
 1. Navigate to the program directory:
 ```bash
-cd regioner
+cd Application
 ```
 
 2. Run the program:
 ```bash
-python3 regioner6.00.py
+python Application/barcc.py
 ```
 
 ## Basic Usage
